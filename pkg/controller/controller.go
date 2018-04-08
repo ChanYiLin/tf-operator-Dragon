@@ -42,8 +42,6 @@ import (
 	listers "github.com/kubeflow/tf-operator/pkg/client/listers/kubeflow/v1alpha1"
 	"github.com/kubeflow/tf-operator/pkg/trainer"
 
-	cluster
-
 )
 
 const (
@@ -335,7 +333,10 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	/*** Jack Lin  ***/
 	/***  Monitor the cluster resclusterource ***/
-	r, err =  c.cluster.SyncResource()
+	r, err := c.cluster.SyncResource()
+	if err != nil {
+		return false, err
+	}
 	log.Info("Cluster Resource: %v", r)
 	/*** Jack Lin  ***/
 

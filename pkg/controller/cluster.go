@@ -18,17 +18,27 @@ package controller
 
 
 import (
-    "fmt"
-
+    //"fmt"
+    log "github.com/sirupsen/logrus"
     "k8s.io/apimachinery/pkg/api/resource"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/fields"
     "k8s.io/client-go/kubernetes"
-    "k8s.io/client-go/pkg/api/v1"
-    batchv1 "k8s.io/client-go/pkg/apis/batch/v1"
-    "k8s.io/client-go/pkg/apis/extensions/v1beta1"
+    //"k8s.io/client-go/pkg/api/v1"
+    //"k8s.io/kubernetes/pkg/api/v1"
+    corev1 "k8s.io/api/core/v1"
+    //batchv1 "k8s.io/client-go/pkg/apis/batch/v1"
+    //"k8s.io/client-go/pkg/apis/extensions/v1beta1"
     "k8s.io/kubernetes/pkg/api"
 )
+
+const (
+    // ResourceNvidiaGPU is the name of the Nvidia GPU resource.
+    ResourceNvidiaGPU = "nvidia.com/gpu"
+)
+
+
+
 
 // Cluster resprensents a Kubernetes cluster.
 type Cluster struct {
@@ -45,7 +55,7 @@ func NewCluster(clientset *kubernetes.Clientset) *Cluster {
 
 // AddResourceList add another v1.ResourceList to first's inner
 // quantity.  v1.ResourceList is equal to map[string]Quantity
-func AddResourceList(a v1.ResourceList, b v1.ResourceList) {
+func AddResourceList(a corev1.ResourceList, b corev1.ResourceList) {
     for resname, q := range b {
         v, ok := a[resname]
         if !ok {
@@ -59,6 +69,112 @@ func AddResourceList(a v1.ResourceList, b v1.ResourceList) {
 }
 
 
+// getPodsTotalRequestsAndLimits accumulate resource requests and
+// limits from all pods containers.
+func getPodsTotalRequestsAndLimits(podList *corev1.PodList) (reqs corev1.ResourceList, limits corev1.ResourceList, err error) {
+    reqs, limits = corev1.ResourceList{}, corev1.ResourceList{}
+    for _, pod := range podList.Items {
+        for _, container := range pod.Spec.Containers {
+            AddResourceList(reqs, container.Resources.Requests)
+            AddResourceList(limits, container.Resources.Limits)
+        }
+
+        for _, container := range pod.Spec.InitContainers {
+            AddResourceList(reqs, container.Resources.Requests)
+            AddResourceList(limits, container.Resources.Limits)
+        }
+    }
+    return
+}
+
+func updateNodesIdleResource(podList *corev1.PodList, nodesCPUIdleMilli map[string]int64, nodesMemoryFreeMega map[string]int64) (err error) {
+    for _, pod := range podList.Items {
+        nodeName := pod.Spec.NodeName
+        if nodeName == "" {
+            continue
+        }
+        for _, container := range pod.Spec.Containers {
+            nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+            nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+        }
+
+        for _, container := range pod.Spec.InitContainers {
+            nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+            nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+        }
+    }
+    return
+}
+
+/*** from kubernetes/autoscaler 
+// GpuRequestInfo contains an information about a set of pods requesting a GPU.
+type GpuRequestInfo struct {
+    // MaxRequest is maximum GPU request among pods
+    MaxRequest resource.Quantity
+    // Pods is a list of pods requesting GPU
+    Pods []*apiv1.Pod
+    // SystemLabels is a set of system labels corresponding to selected GPU
+    // that needs to be passed to cloudprovider
+    SystemLabels map[string]string
+}
+***/
+
+/*** from kubernetes/autoscaler ***/
+// GetGpuRequests returns a GpuRequestInfo for each type of GPU requested by
+// any pod in pods argument. If the pod requests GPU, but doesn't specify what
+// type of GPU it wants (via NodeSelector) it assumes it's DefaultGPUType.
+func GetGpuRequests(podList *corev1.PodList) (GpuReqLimNum resource.Quantity){
+    //result := make(map[string]GpuRequestInfo)
+    //var GpuReqLimNum resource.Quantity
+
+    for _, pod := range podList.Items {
+        for _, container := range pod.Spec.Containers {
+            if container.Resources.Requests != nil {
+                containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
+                GpuReqLimNum.Add(containerGpu)
+            }
+        }
+    }
+
+    /*
+    for _, pod := range pods {
+        var podGpu resource.Quantity
+        for _, container := range pod.Spec.Containers {
+            if container.Resources.Requests != nil {
+                containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
+                podGpu.Add(containerGpu)
+            }
+        }
+        if podGpu.Value() == 0 {
+            continue
+        }
+
+        gpuType := DefaultGPUType
+        if gpuTypeFromSelector, found := pod.Spec.NodeSelector[GPULabel]; found {
+            gpuType = gpuTypeFromSelector
+        }
+
+        requestInfo, found := result[gpuType]
+        if !found {
+            requestInfo = GpuRequestInfo{
+                MaxRequest: podGpu,
+                Pods:       make([]*apiv1.Pod, 0),
+                SystemLabels: map[string]string{
+                    GPULabel: gpuType,
+                },
+            }
+        }
+        if podGpu.Cmp(requestInfo.MaxRequest) > 0 {
+            requestInfo.MaxRequest = podGpu
+        }
+        requestInfo.Pods = append(requestInfo.Pods, pod)
+        result[gpuType] = requestInfo
+    }*/
+    return
+}
+
+
+
 // SyncResource will update free and total resources in k8s cluster.
 func (c *Cluster) SyncResource() (res ClusterResource, err error) {
 
@@ -68,7 +184,7 @@ func (c *Cluster) SyncResource() (res ClusterResource, err error) {
         return ClusterResource{}, err
     }
 
-    allocatable := make(v1.ResourceList)
+    allocatable := make(corev1.ResourceList)
     nodesCPUIdleMilli := make(map[string]int64)
     nodesMemoryFreeMega := make(map[string]int64)
 
@@ -94,6 +210,7 @@ func (c *Cluster) SyncResource() (res ClusterResource, err error) {
     }
 
     allPodsList, err := c.clientset.CoreV1().Pods(namespace).List(metav1.ListOptions{FieldSelector: fieldSelector.String()})
+
     if err != nil {
         return ClusterResource{}, err
     }
@@ -103,22 +220,45 @@ func (c *Cluster) SyncResource() (res ClusterResource, err error) {
         return ClusterResource{}, err
     }
 
+    /*** 待修改 換方法計算GPU數量 ***/
+    var GPUTotalNum resource.Quantity
+
+    for _, node := range nodeList.Items {
+        nodeGpu := node.Status.Allocatable[ResourceNvidiaGPU]
+        GPUTotalNum.Add(nodeGpu)
+    }
+
+    GPUReqLimNum := GetGpuRequests(allPodsList)
+    
+    log.Info("Cluster total GPU: %v",   int(GPUTotalNum.Value()))
+    log.Info("Cluster all Req GPU: %v", int(GPUReqLimNum.Value()))
+
+    // node.Status.Allocatable[ResourceNvidiaGPU]
+    /*** 待修改 換方法計算GPU數量 ***/
+
+
+
+
+
     err = updateNodesIdleResource(allPodsList, nodesCPUIdleMilli, nodesMemoryFreeMega)
+
     if err != nil {
         return ClusterResource{}, err
     }
 
+
+
     res = ClusterResource{
         NodeCount:       len(nodeList.Items),
-        GPUTotal:        int(allocatable.NvidiaGPU().Value()),
+        GPUTotal:        int(GPUTotalNum.Value()), //int(allocatable.NvidiaGPU().Value())
         CPUTotalMilli:   allocatable.Cpu().ScaledValue(resource.Milli),
         MemoryTotalMega: allocatable.Memory().ScaledValue(resource.Mega),
 
-        GPURequest:        int(allReqs.NvidiaGPU().Value()),
+        GPURequest:        int(GPUReqLimNum.Value()),   //int(allReqs.NvidiaGPU().Value())
         CPURequestMilli:   allReqs.Cpu().ScaledValue(resource.Milli),
         MemoryRequestMega: allReqs.Memory().ScaledValue(resource.Mega),
 
-        GPULimit:        int(allLimits.NvidiaGPU().Value()),
+        GPULimit:        int(allReqs.NvidiaGPU().Value()),  //int(allLimits.NvidiaGPU().Value())
         CPULimitMilli:   allLimits.Cpu().ScaledValue(resource.Milli),
         MemoryLimitMega: allLimits.Memory().ScaledValue(resource.Mega),
 
@@ -129,7 +269,6 @@ func (c *Cluster) SyncResource() (res ClusterResource, err error) {
     }
     return
 }
-
 
 
 

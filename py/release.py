@@ -158,18 +158,24 @@ def build_operator_image(root_dir,
       ])
     util.run(["go", "install", t])
 
+  logging.info("root_dir = %s",root_dir)
   # Dashboard's frontend:
+  
   # Resolving dashboard's front-end dependencies
   util.run(
     ["yarn", "--cwd", "{}/dashboard/frontend".format(root_dir), "install"])
   # Building dashboard's front-end
   util.run(["yarn", "--cwd", "{}/dashboard/frontend".format(root_dir), "build"])
 
+  #logging.info("before bin_path")
+
   # If the release is not done from a Linux machine
   # we need to grab the artefacts from /bin/linux_amd64
   bin_path = "bin"
   if platform.system() != "Linux":
     bin_path += "/linux_amd64"
+
+  #logging.info("after bin_path")
 
   # List of paths to copy relative to root.
   sources = [
