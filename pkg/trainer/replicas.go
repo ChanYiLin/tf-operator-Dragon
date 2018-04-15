@@ -117,6 +117,43 @@ func NewTFReplicaSet(clientSet kubernetes.Interface, recorder record.EventRecord
 	}, nil
 }
 
+/*** Jack Lin***/
+func (s *TFReplicaSet) GetReplicasSetSpec() tfv1alpha1.TFReplicaSpec {
+	return s.Spec
+}
+
+
+func (s *TFReplicaSet) GetPodStatus() (running, pending int, err error) {
+
+	selector, err := s.Labels().ToSelector()
+	options := meta_v1.ListOptions{
+		LabelSelector: selector,
+	}
+
+	// List to get pods of the job.
+	pl, err := s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).List(options)
+	if err != nil {
+		return 0, 0 ,err
+	}
+	s.contextLogger.Infof("Get Pod List in namespace=%v LabelSelector=%v", s.Job.job.ObjectMeta.Namespace, options.LabelSelector)
+
+	for _, pod := range pl.Items {
+		switch pod.Status.Phase {
+		case v1.PodPending:
+			s.contextLogger.Infof("Pod %v is in pending phase", pod.ObjectMeta.Name)
+			pending += 1
+		case v1.PodRunning:
+			s.contextLogger.Infof("Pod %v is in running phase", pod.ObjectMeta.Name)
+			running += 1
+		default:
+			s.contextLogger.Infof("Pod %v is in failed, succeeded or unknown phase", pod.ObjectMeta.Name)
+		}
+	}
+
+	return
+}
+
+
 // Labels returns the labels for this replica set.
 func (s *TFReplicaSet) Labels() KubernetesLabels {
 	return KubernetesLabels(map[string]string{

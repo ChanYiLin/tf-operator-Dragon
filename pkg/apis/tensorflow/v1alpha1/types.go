@@ -60,6 +60,9 @@ type TFJobSpec struct {
 
 	// SchedulerName specifies the name of scheduler which should handle the TFJob
 	SchedulerName string `json:"schedulerName,omitempty"`
+
+	MinInstance int                     `json:"min-instance"`
+	MaxInstance int                     `json:"max-instance"`
 }
 
 // TerminationPolicySpec structure for storing specifications for process termination

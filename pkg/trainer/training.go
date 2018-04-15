@@ -107,6 +107,42 @@ func NewJob(kubeCli kubernetes.Interface, tfJobClient tfjobclient.Interface, rec
 	return j, nil
 }
 
+
+/*** Jack Lin***/
+
+func (j *TrainingJob) GetJobStatus() tfv1alpha1.TFJobStatus {
+	//log.Info("in GetJobReplicasSetList")
+	//log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
+	//log.Info("j.Replicas: %v", j.Replicas)
+	return j.status
+}
+
+func (j *TrainingJob) GetJob() *tfv1alpha1.TFJob {
+	return j.job
+}
+
+
+func (j *TrainingJob) GetJobPodListStatus() (total, running, pending int, err error) {
+	//var totalTmp, runningTmp, pendingTmp int = 0
+	for _, r := range j.Replicas {
+		totalTmp   		 	        := int(*r.Spec.Replicas)
+		runningTmp, pendingTmp, err := r.GetPodStatus()
+		if err != nil {
+			return  0,0,0,err
+		}
+
+		total   += totalTmp
+		running += runningTmp
+		pending += pendingTmp
+	}
+	return
+
+}
+
+/*** Jack Lin***/
+
+
+
 // Update replaces the TFJob corresponding to TrainingJob with the provided job.
 // This function is used when the Spec/Status of the job is modified outside the controller.
 // For example, if the user issues a delete request. This will update the metadata on the object

@@ -30,6 +30,8 @@ import (
     //batchv1 "k8s.io/client-go/pkg/apis/batch/v1"
     //"k8s.io/client-go/pkg/apis/extensions/v1beta1"
     "k8s.io/kubernetes/pkg/api"
+
+    "github.com/kubeflow/tf-operator/pkg/trainer"
 )
 
 const (
@@ -50,6 +52,39 @@ func NewCluster(clientset *kubernetes.Clientset) *Cluster {
     return &Cluster{
         clientset: clientset,
     }
+}
+
+// JobPods returns the number total desired pods and the number of
+// running pods of a job.
+func (c Cluster) JobPods(j *trainer.TrainingJob) (total, running, pending int, err error) {
+    if err != nil {
+        return
+    }
+    //var jobPodList *corev1.PodList
+
+    total, running, pending, err = j.GetJobPodListStatus()
+
+    return
+
+
+
+    /*
+    // get pods of the job
+    jobPods, err := c.clientset.CoreV1().
+        Pods(job.ObjectMeta.Namespace).
+        List(metav1.ListOptions{LabelSelector: "paddle-job=" + job.ObjectMeta.Name})
+    for _, pod := range jobPods.Items {
+        total++
+        // pod.ObjectMeta.DeletionTimestamp means pod is terminating
+        if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodRunning {
+            running++
+        }
+        if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodPending {
+            pending++
+        }
+    }
+    return
+    */
 }
 
 
@@ -254,11 +289,11 @@ func (c *Cluster) SyncResource() (res ClusterResource, err error) {
         CPUTotalMilli:   allocatable.Cpu().ScaledValue(resource.Milli),
         MemoryTotalMega: allocatable.Memory().ScaledValue(resource.Mega),
 
-        GPURequest:        int(GPUReqLimNum.Value()),   //int(allReqs.NvidiaGPU().Value())
+        GPURequest:        int(GPUReqLimNum.Value()),   //int(allReqs.NvidiaGPU().Value()) // useless
         CPURequestMilli:   allReqs.Cpu().ScaledValue(resource.Milli),
         MemoryRequestMega: allReqs.Memory().ScaledValue(resource.Mega),
 
-        GPULimit:        int(allReqs.NvidiaGPU().Value()),  //int(allLimits.NvidiaGPU().Value())
+        GPULimit:        int(GPUReqLimNum.Value()),  //int(allLimits.NvidiaGPU().Value()) // only GPU limits has meaning. 
         CPULimitMilli:   allLimits.Cpu().ScaledValue(resource.Milli),
         MemoryLimitMega: allLimits.Memory().ScaledValue(resource.Mega),
 

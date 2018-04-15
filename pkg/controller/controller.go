@@ -18,12 +18,14 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -75,8 +77,6 @@ type NodeInfos struct {
 	NodesMemoryFreeMega map[string]int64
 }
 /*** Jack Lin  ***/
-
-
 
 var (
 	// ErrVersionOutdated is a exported var to capture the error in apiserver
@@ -138,6 +138,391 @@ type Controller struct {
 	/*** Jack Lin ***/
 	
 }
+
+/*** Jack Lin  ***/
+
+// elastic job filter.
+//func elastic(j job) bool {
+//	return j.Config.Elastic()
+//}
+
+// gpu job filter.
+//func gpu(j job) bool {
+//	return j.Config.NeedGPU()
+//}
+
+
+
+
+//type ComparedJobs []*trainer.TrainingJob
+
+type ComparedJobs struct {
+	Key string
+  	Value *trainer.TrainingJob
+}
+
+type ComparedJobsList []ComparedJobs
+
+func Fulfillment(j ComparedJobs) float64 {
+	//minInstance := j.Config.Spec.Trainer.MinInstance
+	//maxInstance := j.Config.Spec.Trainer.MaxInstance
+
+	jobA := j.Value.GetJob()
+	minInstance := jobA.Spec.MinInstance
+	maxInstance := jobA.Spec.MaxInstance
+
+	if minInstance == maxInstance {
+		return 1
+	}
+
+	var curInstance int
+
+	jobAReplicasSetList := j.Value.GetJobReplicasSetList()
+
+
+	for _, t := range jobAReplicasSetList {
+		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			tReplicasSetSpec := t.GetReplicasSetSpec()
+			curInstance = int(*tReplicasSetSpec.Replicas)
+			log.Info("in Fulfillment: curInstance: %v", curInstance)
+			break
+		}
+	}
+
+
+	//curInstance := int(*j.TrainerJob.Spec.Parallelism)
+
+	return float64(curInstance-minInstance) / float64(maxInstance-minInstance)
+}
+
+
+func (j ComparedJobsList) Len() int {
+	return len(j)
+}
+
+func (j ComparedJobsList) Less(a int, b int) bool {
+	scoreA := Fulfillment(j[a])
+	scoreB := Fulfillment(j[b])
+
+	jobAReplicasSetList := j[a].Value.GetJobReplicasSetList()
+	jobBReplicasSetList := j[b].Value.GetJobReplicasSetList()
+
+	var jAReplicasSet *trainer.TFReplicaSet
+	var jBReplicasSet *trainer.TFReplicaSet
+
+	log.Info("in Sort Less: scoreA: %v, scoreB: %v", scoreA, scoreB)
+	if scoreA == scoreB {
+
+		for _, t := range jobAReplicasSetList {
+			if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
+				jAReplicasSet = t
+				break
+			}
+		}
+
+
+		for _, k := range jobBReplicasSetList {
+			if k.Spec.TFReplicaType == tfv1alpha1.WORKER {
+				jBReplicasSet = k
+				break
+			}
+		}
+
+		jAReplicasSetSpec := jAReplicasSet.GetReplicasSetSpec()
+		jBReplicasSetSpec := jBReplicasSet.GetReplicasSetSpec()
+
+		//resA := j[a].Config.Spec.Trainer.Resources
+		//resB := j[b].Config.Spec.Trainer.Resources
+		//log.Info("resA has GPU limits %v")
+		var resARequestsCPU resource.Quantity
+		var resARequestsMem resource.Quantity
+		var resALimitsGPU resource.Quantity
+
+		var resBRequestsCPU resource.Quantity
+		var resBRequestsMem resource.Quantity
+		var resBLimitsGPU resource.Quantity
+
+		for _, container := range jAReplicasSetSpec.Template.Spec.Containers {
+			log.Info("In sort jAReplicasSet Container: %v", container.Name)
+			tmpCPU := *container.Resources.Requests.Cpu()
+			resARequestsCPU.Add(tmpCPU)
+
+			tmpMem := *container.Resources.Requests.Memory()
+			resARequestsMem.Add(tmpMem)
+			
+			tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
+			resALimitsGPU.Add(tmpGpu)
+			
+		}
+
+		for _, container := range jBReplicasSetSpec.Template.Spec.Containers {
+			log.Info("In sort jBReplicasSet Container: %v", container.Name)
+			tmpCPU := *container.Resources.Requests.Cpu()
+			resBRequestsCPU.Add(tmpCPU)
+
+			tmpMem := *container.Resources.Requests.Memory()
+			resBRequestsMem.Add(tmpMem)
+			
+			tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
+			resBLimitsGPU.Add(tmpGpu)
+			
+		}
+
+		//resALimitsGPU := jA.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
+		//resBLimitsGPU := jB.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
+		//log.Info("resA resB has GPU limits %v / %v", int(resALimitsGPU.Value()), int(resBLimitsGPU.Value()))
+		
+		if resALimitsGPU.Cmp(resBLimitsGPU) == 0 {
+			if resARequestsCPU.Cmp(resBRequestsCPU) == 0 {
+				return resARequestsMem.Cmp(resBRequestsMem) == -1
+			}
+			return resARequestsCPU.Cmp(resBRequestsCPU) == -1
+		}
+		return resALimitsGPU.Cmp(resBLimitsGPU) == -1
+	}
+	return scoreA < scoreB
+}
+
+func (j ComparedJobsList) Swap(a int, b int) {
+	j[a], j[b] = j[b], j[a]
+}
+
+
+// sortedJobs return the names of sorted jobs by fulfillment and
+// tiebreakers in ascending order.
+func sortedJobs(j map[string]*trainer.TrainingJob) ComparedJobsList {
+	//var js jobs
+	js := make(ComparedJobsList, len(j))
+	i := 0
+	for k, v := range j {
+		js[i] = ComparedJobs{k, v}
+	    i++
+	}
+/*nextJob:
+	for _, v := range j {
+		for _, f := range filters {
+			if !f(v) {
+				continue nextJob
+			}
+		}
+		js = append(js, v)
+	}
+*/
+	sort.Sort(js)
+	log.Info("in sortedJobs sorted js: %v", js)
+	return js
+}
+
+func searchAssignableNode(r *ClusterResource, jA tfv1alpha1.TFReplicaSpec) (nodeName string) {
+	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
+		if jA.Template.Spec.Containers[0].Resources.Requests.Cpu().ScaledValue(resource.Milli) <= idle &&
+			jA.Template.Spec.Containers[0].Resources.Requests.Memory().ScaledValue(resource.Mega) <= r.NodeInfos.NodesMemoryFreeMega[name] {
+			return name
+		}
+	}
+	return ""
+}
+
+
+func scaleDryRun(r *ClusterResource, j *trainer.TrainingJob, curDiff int, scaleDown bool) (additional int) {
+	additionalGPUInstance := 0
+	additionalCPUInstance := 0
+
+
+	jobAReplicasSetList := j.GetJobReplicasSetList()
+	var jAReplicasSetSpec tfv1alpha1.TFReplicaSpec
+
+	log.Info("jobAReplicasSetList len: %v", len(jobAReplicasSetList))
+	workerFlag := false
+	for _, t := range jobAReplicasSetList {
+		log.Info("in scaleDryRun t.Spec.TFReplicaType: %v", t.Spec.TFReplicaType)
+		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			workerFlag = true
+			jAReplicasSetSpec = t.Spec
+			break
+		}
+	}
+
+	if (workerFlag == false){
+		return
+	}
+
+	// tfv1alpha1.TFReplicaSpec
+	//jAReplicasSetSpec := jAReplicasSet.GetReplicasSetSpec()
+
+
+	log.Info("jAReplicasSetSpec TFReplicaType: %v", jAReplicasSetSpec.TFReplicaType)
+	
+	//if(jAReplicasSet.Spec.Template.Containers == nil){
+	//	return
+	//}
+	var cpuRequestMilli int64
+	var memRequestMega int64
+	var gpuLimitNum resource.Quantity
+
+	for _, container := range jAReplicasSetSpec.Template.Spec.Containers {
+		log.Info("in scaleDryRun container info: %v", container)
+		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+		memRequestMega  += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+		tmpGpu			:= container.Resources.Requests[ResourceNvidiaGPU]
+		gpuLimitNum.Add(tmpGpu)
+	}
+	//cpuRequestMilli := jAReplicasSet.Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().ScaledValue(resource.Milli)
+	//memRequestMega := jA.Template.Spec.Containers[0].Resources.Requests.Memory().ScaledValue(resource.Mega)
+	//gpuLimitNum := jA.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
+	
+	gpuLimit := int(gpuLimitNum.Value())
+
+	log.Info("pod need CPU %v, Mem %v, GPU %v", cpuRequestMilli, memRequestMega, gpuLimit)
+
+	nodeName := ""
+
+	// Adjust resource upon return.
+	defer func() {
+		r.GPULimit += gpuLimit * additional
+		r.CPURequestMilli += cpuRequestMilli * int64(additional)
+		r.MemoryRequestMega += memRequestMega * int64(additional)
+		if nodeName != "" {
+			r.NodeInfos.NodesCPUIdleMilli[nodeName] += cpuRequestMilli * int64(additional)
+			r.NodeInfos.NodesMemoryFreeMega[nodeName] += memRequestMega * int64(additional)
+		}
+	}()
+
+	jobA := j.GetJob()
+
+	// TODO(helin): j.TrainerJob.Spec.Parallelism may not reflect
+	// the actual pod running for the trainer job. We need to
+	// count the pod manually. And calculate the additional value
+	// based on the running pod count,
+	// j.TrainerJob.Spec.Parallelism, and curDiff.
+	plannedInstance := int(*jAReplicasSetSpec.Replicas) + curDiff
+	instanceMax := jobA.Spec.MaxInstance
+	instanceMin := jobA.Spec.MinInstance
+
+	// TODO(typhoonzero): refine below code to remove direction
+	// ======================= scaleDown ======================
+	if scaleDown {
+		if plannedInstance > instanceMax {
+			additional = -1
+			return
+		}
+		//gpuCondition := r.GPULimit > int(float64(r.GPUTotal)*maxLoadDesired)
+		cpuCondition := r.CPURequestMilli > int64(float64(r.CPUTotalMilli)*0.97)
+		if cpuCondition {
+			if plannedInstance > instanceMin {
+				additional = -1
+				return
+			}
+
+			// can not scale down further
+			additional = 0
+			return
+		}
+		// do not try to scale up
+		return
+	}
+	// ======================= scaleUp ==========================
+
+	if plannedInstance >= instanceMax {
+		// Do not scale or scale down, don't need to check if
+		// there are available free resources.
+		additional = instanceMax - plannedInstance
+		return
+	}
+
+	if r.MemoryTotalMega-r.MemoryRequestMega <= memRequestMega {
+		// insufficient memory, do not scale
+		additional = 0
+		return
+	}
+	if nodeName = searchAssignableNode(r, jAReplicasSetSpec); nodeName == "" {
+		additional = 0
+		return
+	}
+
+	// NOTE: do not scale up to use full cluster resource of CPU
+	//       but we do scale up for GPU.
+	if int64(float64(r.CPUTotalMilli)*0.97)-r.CPURequestMilli >= cpuRequestMilli {
+		additionalCPUInstance = 1
+	}
+
+	needGPU := gpuLimit > 0
+	if needGPU && r.GPUTotal-r.GPULimit >= gpuLimit {
+		additionalGPUInstance = 1
+	}
+
+	if needGPU {
+		if additionalGPUInstance < additionalCPUInstance {
+			additional = additionalGPUInstance
+		} else {
+			additional = additionalCPUInstance
+		}
+	} else {
+		additional = additionalCPUInstance
+	}
+
+	return
+}
+
+/*
+sorted = []ComparedJobs = ComparedJobsList
+type ComparedJobs struct {
+	Key string
+  	Value *trainer.TrainingJob
+}
+*/
+
+func (c *Controller) scaleAllDryRun(r ClusterResource, jobs map[string]*trainer.TrainingJob) map[string]int {
+
+	diff := make(map[string]int)
+
+	for {
+		noChange := true
+		sorted := sortedJobs(jobs)
+		dryRun := func(j *trainer.TrainingJob, isScaleDown bool) {
+			name := j.GetJob().ObjectMeta.GetName()
+			log.Info("scale dry run job: %v", name)
+
+			additional := scaleDryRun(&r, j, diff[name], isScaleDown)
+
+			log.Info(
+				"dry run scale job ",
+				" name ", name, " current scale difference ", diff[name],
+				" scale up number of instances ", additional, " cluster resource ", r,
+			)
+			diff[name] += additional
+
+			if additional != 0 {
+				noChange = false
+			}
+		}
+		// scale up from the ones that need scaling up the
+		// most.
+		for _, j := range sorted {
+			dryRun(j.Value, false)
+		}
+
+		// scale down from the ones that need scaling up the
+		// least.
+		for i := len(sorted) - 1; i >= 0; i-- {
+			dryRun(sorted[i].Value, true)
+		}
+
+		if noChange {
+			break
+		}
+	}
+
+	return diff
+
+}
+
+
+/*** Jack Lin  ***/
+
+
+
+
 
 // New method sets up service client handles and returns controller object
 func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobclient.Interface,
@@ -292,6 +677,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	if len(ns) == 0 || len(name) == 0 {
 		return false, fmt.Errorf("invalid job key %q: either namespace or name is missing", key)
 	}
+	if ns != "jack-kubeflow" {
+		return false, nil
+	}
 
 	tfJob, err := c.TFJobLister.TFJobs(ns).Get(name)
 
@@ -337,14 +725,102 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	log.Info("Cluster Resource: %v", r)
+	log.Info("sync cluster resource done", "resource", r)
 	/*** Jack Lin  ***/
+
 
 	nc := c.jobs[key]
 
 	if err := nc.Reconcile(&c.config, c.enableGangScheduling); err != nil {
 		return false, err
 	}
+
+
+	/*** Jack Lin  ***/
+	/***  Get all jobs status ***/
+
+	havePending := false
+	for _, j := range c.jobs {
+		// k8s job for trainers may not be created immediently
+		// try sync it here
+		/*if j.TrainerJob == nil {
+			tj, err := a.cluster.GetTrainerJob(j.Config)
+			if err != nil {
+				log.Error(
+					"Error getting the trainer k8s job, will sync later.",
+					"name", j.Config.ObjectMeta.Name,
+					"error", err,
+				)
+				continue
+			}
+			j.TrainerJob = tj
+			a.jobs[key] = j
+		}*/
+
+		// j is a *trainer.TrainingJob a pointer to the trainer.TrainingJob
+		total, _, pending, err := c.cluster.JobPods(j)
+
+		if err != nil {
+			log.Error("check if job is running failed", "error", err)
+			continue
+		}
+
+		if total == pending {
+			havePending = true
+			break
+		}
+	}
+
+	js := make(map[string]*trainer.TrainingJob)
+	for key, j := range c.jobs {
+		// k8s job for trainers may not be created immediently
+		// try sync it here
+		/*if j.TrainerJob == nil {
+			tj, err := a.cluster.GetTrainerJob(j.Config)
+			if err != nil {
+				log.Error(
+					"Error getting the trainer k8s job, will sync later.",
+					"name", j.Config.ObjectMeta.Name,
+					"error", err,
+				)
+				continue
+			}
+			j.TrainerJob = tj
+			a.jobs[key] = j
+		}*/
+
+		total, running, pending, err:= c.cluster.JobPods(j)
+		if err != nil {
+			log.Error("check if job is running failed", "error", err)
+			continue
+		}
+
+		log.Info(
+			"job info ",
+			"name ", key,
+			"running ", running,
+			"pending ", pending,
+			"total ", total,
+		)
+
+		// Scale jobs only when all pods' "Phase" are
+		// running, or some job is pending.
+		if total == running || havePending {
+			log.Info("jog", key, "is append into js")
+			js[key] = j
+			//js = append(js, j)
+		}
+	}
+
+
+
+	/***  Scale Plan ***/
+	diff := c.scaleAllDryRun(r, js)
+
+	log.Info("Scale Plan %v", diff)
+	log.Info("Congrats!!!")
+	/*** Jack Lin  ***/	
+
 
 	// TODO(jlewi): Why do we issue a get request again here?
 	tfJob, err = c.TFJobClient.KubeflowV1alpha1().TFJobs(tfJob.ObjectMeta.Namespace).Get(tfJob.ObjectMeta.Name, metav1.GetOptions{})
