@@ -109,12 +109,11 @@ func NewJob(kubeCli kubernetes.Interface, tfJobClient tfjobclient.Interface, rec
 
 
 /*** Jack Lin***/
-
-func (j *TrainingJob) GetJobStatus() tfv1alpha1.TFJobStatus {
+func (j *TrainingJob) GetJobReplicasSetList() []*TFReplicaSet {
 	//log.Info("in GetJobReplicasSetList")
 	//log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
 	//log.Info("j.Replicas: %v", j.Replicas)
-	return j.status
+	return j.Replicas
 }
 
 func (j *TrainingJob) GetJob() *tfv1alpha1.TFJob {
@@ -125,15 +124,18 @@ func (j *TrainingJob) GetJob() *tfv1alpha1.TFJob {
 func (j *TrainingJob) GetJobPodListStatus() (total, running, pending int, err error) {
 	//var totalTmp, runningTmp, pendingTmp int = 0
 	for _, r := range j.Replicas {
-		totalTmp   		 	        := int(*r.Spec.Replicas)
-		runningTmp, pendingTmp, err := r.GetPodStatus()
-		if err != nil {
-			return  0,0,0,err
-		}
+		if (r.Spec.TFReplicaType == tfv1alpha1.WORKER) {
+			totalTmp   		 	        := int(*r.Spec.Replicas)
+			runningTmp, pendingTmp, err := r.GetPodStatus()
+			if err != nil {
+				return  0,0,0,err
+			}
 
-		total   += totalTmp
-		running += runningTmp
-		pending += pendingTmp
+			total   += totalTmp
+			running += runningTmp
+			pending += pendingTmp
+		}
+		
 	}
 	return
 
@@ -514,7 +516,8 @@ func (j *TrainingJob) syncPdb() error {
 	minAvailable := intstr.FromInt(int(nrReplicas))
 	pdb := &v1beta1.PodDisruptionBudget{
 		ObjectMeta: meta_v1.ObjectMeta{
-			GenerateName: "tf-job-pdb-",
+			//GenerateName: "tf-job-pdb-",
+			Name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
 		},
 		Spec: v1beta1.PodDisruptionBudgetSpec{
 			MinAvailable: &minAvailable,
@@ -527,10 +530,25 @@ func (j *TrainingJob) syncPdb() error {
 		},
 	}
 
+	/*
+	options := meta_v1.ListOptions{
+		name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
+	}
+
+	// List to get pods
+	pdbl, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(s.Job.job.ObjectMeta.Namespace).List(options)
+	if err != nil {
+		return err
+	}
+
+	if len(pdbl) {
+
+	}*/
+
 	createdPdb, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(j.job.ObjectMeta.Namespace).Create(pdb)
 	if err != nil {
 		if k8s_errors.IsAlreadyExists(err) {
-			j.contextLogger.Infof("PDB: %v already exists.", j.job.ObjectMeta.Name)
+			j.contextLogger.Infof("PDB: %v already exists.", "tf-job-pdb-" + j.job.ObjectMeta.Name)
 			return nil
 		}
 

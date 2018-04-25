@@ -60,6 +60,7 @@ func Run(opt *options.ServerOption) error {
 		log.Infof("KUBEFLOW_NAMESPACE not set, using default namespace")
 		namespace = metav1.NamespaceDefault
 	}
+	namespace = "jack-kubeflow"
 
 	// To help debugging, immediately log version
 	log.Infof("%+v", version.Info())
@@ -87,13 +88,11 @@ func Run(opt *options.ServerOption) error {
 	cluster := controller.NewCluster(kubeClientset)
 	/*** Jack Lin ***/
 
-
-
 	tfJobInformerFactory := informers.NewSharedInformerFactory(tfJobClient, time.Second*30)
-	
+
 	/*** Jack Lin ***/
 	// add controller.New("cluster" ...
-	controller, err := controller.New(cluster, kubeClient, tfJobClient, *controllerConfig, tfJobInformerFactory, opt.EnableGangScheduling)
+	controller, err := controller.New(cluster, kubeClient, tfJobClient, *controllerConfig, tfJobInformerFactory, true)
 	if err != nil {
 		return err
 	}
