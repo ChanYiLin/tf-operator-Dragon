@@ -107,7 +107,6 @@ func NewJob(kubeCli kubernetes.Interface, tfJobClient tfjobclient.Interface, rec
 	return j, nil
 }
 
-
 /*** Jack Lin***/
 func (j *TrainingJob) GetJobReplicasSetList() []*TFReplicaSet {
 	//log.Info("in GetJobReplicasSetList")
@@ -120,30 +119,27 @@ func (j *TrainingJob) GetJob() *tfv1alpha1.TFJob {
 	return j.job
 }
 
-
 func (j *TrainingJob) GetJobPodListStatus() (total, running, pending int, err error) {
 	//var totalTmp, runningTmp, pendingTmp int = 0
 	for _, r := range j.Replicas {
-		if (r.Spec.TFReplicaType == tfv1alpha1.WORKER) {
-			totalTmp   		 	        := int(*r.Spec.Replicas)
+		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			totalTmp := int(*r.Spec.Replicas)
 			runningTmp, pendingTmp, err := r.GetPodStatus()
 			if err != nil {
-				return  0,0,0,err
+				return 0, 0, 0, err
 			}
 
-			total   += totalTmp
+			total += totalTmp
 			running += runningTmp
 			pending += pendingTmp
 		}
-		
+
 	}
 	return
 
 }
 
 /*** Jack Lin***/
-
-
 
 // Update replaces the TFJob corresponding to TrainingJob with the provided job.
 // This function is used when the Spec/Status of the job is modified outside the controller.
@@ -531,24 +527,24 @@ func (j *TrainingJob) syncPdb() error {
 	}
 
 	/*
-	options := meta_v1.ListOptions{
-		name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
-	}
+		options := meta_v1.ListOptions{
+			name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
+		}
 
-	// List to get pods
-	pdbl, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(s.Job.job.ObjectMeta.Namespace).List(options)
-	if err != nil {
-		return err
-	}
+		// List to get pods
+		pdbl, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(s.Job.job.ObjectMeta.Namespace).List(options)
+		if err != nil {
+			return err
+		}
 
-	if len(pdbl) {
+		if len(pdbl) {
 
-	}*/
+		}*/
 
 	createdPdb, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(j.job.ObjectMeta.Namespace).Create(pdb)
 	if err != nil {
 		if k8s_errors.IsAlreadyExists(err) {
-			j.contextLogger.Infof("PDB: %v already exists.", "tf-job-pdb-" + j.job.ObjectMeta.Name)
+			j.contextLogger.Infof("PDB: %v already exists.", "tf-job-pdb-"+j.job.ObjectMeta.Name)
 			return nil
 		}
 

@@ -505,14 +505,14 @@ func (c *Controller) scaleAllDryRun(r ClusterResource, jobs map[string]*trainer.
 	for {
 
 		jobSufficientSorted := sortedJobSufficiency(jobSufficient)
-
 		noChange := true
-
 		surplus := 0
 
 		for _, j := range jobSufficientSorted {
 			surplus += j.Value // current surplus
 		}
+
+		log.Info("currentAddJob: ", currentAddJob, "& jobNotSufficientSorted: ", len(jobNotSufficientSorted))
 
 		if len(jobNotSufficientSorted) > 0 {
 			if currentAddJob >= len(jobNotSufficientSorted) {
@@ -540,13 +540,10 @@ func (c *Controller) scaleAllDryRun(r ClusterResource, jobs map[string]*trainer.
 			if additional == -1 {
 				if len(jobNotSufficientSorted) > 0 {
 					jobNotSufficientSorted[currentAddJob].Value += 1
-				}
-			}
-
-			if len(jobNotSufficientSorted) > 0 {
-				// if the currentAddJob is sufficient then move to next job.
-				if jobNotSufficientSorted[currentAddJob].Value >= 0 {
-					currentAddJob += 1
+					// if the currentAddJob is sufficient then move to next job.
+					if jobNotSufficientSorted[currentAddJob].Value >= 0 {
+						currentAddJob += 1
+					}
 				}
 			}
 
