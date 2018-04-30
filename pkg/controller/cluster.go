@@ -4,7 +4,7 @@ Copyright 2018 Jack Lin (jacklin@laslab.cs.nthu.edu)
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-  
+
     http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
@@ -16,132 +16,153 @@ limitations under the License.
 
 package controller
 
-
 import (
-    //"fmt"
-    log "github.com/sirupsen/logrus"
-    "k8s.io/apimachinery/pkg/api/resource"
-    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-    "k8s.io/apimachinery/pkg/fields"
-    "k8s.io/client-go/kubernetes"
-    //"k8s.io/client-go/pkg/api/v1"
-    //"k8s.io/kubernetes/pkg/api/v1"
-    corev1 "k8s.io/api/core/v1"
-    //batchv1 "k8s.io/client-go/pkg/apis/batch/v1"
-    //"k8s.io/client-go/pkg/apis/extensions/v1beta1"
-    "k8s.io/kubernetes/pkg/api"
+	//"fmt"
 
-    "github.com/kubeflow/tf-operator/pkg/trainer"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/kubernetes"
+	//"k8s.io/client-go/pkg/api/v1"
+	//"k8s.io/kubernetes/pkg/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	//batchv1 "k8s.io/client-go/pkg/apis/batch/v1"
+	//"k8s.io/client-go/pkg/apis/extensions/v1beta1"
+	"k8s.io/kubernetes/pkg/api"
+
+	tfjobclient "github.com/kubeflow/tf-operator/pkg/client/clientset/versioned"
+	"github.com/kubeflow/tf-operator/pkg/trainer"
+	log "github.com/sirupsen/logrus"
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-    // ResourceNvidiaGPU is the name of the Nvidia GPU resource.
-    ResourceNvidiaGPU = "nvidia.com/gpu"
+	// ResourceNvidiaGPU is the name of the Nvidia GPU resource.
+	ResourceNvidiaGPU = "nvidia.com/gpu"
 )
-
-
-
 
 // Cluster resprensents a Kubernetes cluster.
 type Cluster struct {
-    clientset *kubernetes.Clientset
+	clientset *kubernetes.Clientset
 }
 
 // NewCluster create a new instance of K8sCluster.
 func NewCluster(clientset *kubernetes.Clientset) *Cluster {
-    return &Cluster{
-        clientset: clientset,
-    }
+	return &Cluster{
+		clientset: clientset,
+	}
 }
 
 // JobPods returns the number total desired pods and the number of
 // running pods of a job.
 func (c Cluster) JobPods(j *trainer.TrainingJob) (total, running, pending int, err error) {
-    if err != nil {
-        return
-    }
-    //var jobPodList *corev1.PodList
+	if err != nil {
+		return
+	}
+	//var jobPodList *corev1.PodList
 
-    total, running, pending, err = j.GetJobPodListStatus()
+	total, running, pending, err = j.GetJobPodListStatus()
 
-    return
+	return
 
-
-
-    /*
-    // get pods of the job
-    jobPods, err := c.clientset.CoreV1().
-        Pods(job.ObjectMeta.Namespace).
-        List(metav1.ListOptions{LabelSelector: "paddle-job=" + job.ObjectMeta.Name})
-    for _, pod := range jobPods.Items {
-        total++
-        // pod.ObjectMeta.DeletionTimestamp means pod is terminating
-        if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodRunning {
-            running++
-        }
-        if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodPending {
-            pending++
-        }
-    }
-    return
-    */
+	/*
+	   // get pods of the job
+	   jobPods, err := c.clientset.CoreV1().
+	       Pods(job.ObjectMeta.Namespace).
+	       List(metav1.ListOptions{LabelSelector: "paddle-job=" + job.ObjectMeta.Name})
+	   for _, pod := range jobPods.Items {
+	       total++
+	       // pod.ObjectMeta.DeletionTimestamp means pod is terminating
+	       if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodRunning {
+	           running++
+	       }
+	       if pod.ObjectMeta.DeletionTimestamp == nil && pod.Status.Phase == v1.PodPending {
+	           pending++
+	       }
+	   }
+	   return
+	*/
 }
-
 
 // AddResourceList add another v1.ResourceList to first's inner
 // quantity.  v1.ResourceList is equal to map[string]Quantity
 func AddResourceList(a corev1.ResourceList, b corev1.ResourceList) {
-    for resname, q := range b {
-        v, ok := a[resname]
-        if !ok {
-            a[resname] = q.DeepCopy()
-        }
-        v.Add(q)
-        a[resname] = v
-    }
+	for resname, q := range b {
+		v, ok := a[resname]
+		if !ok {
+			a[resname] = q.DeepCopy()
+		}
+		v.Add(q)
+		a[resname] = v
+	}
 
-    return
+	return
 }
-
 
 // getPodsTotalRequestsAndLimits accumulate resource requests and
 // limits from all pods containers.
 func getPodsTotalRequestsAndLimits(podList *corev1.PodList) (reqs corev1.ResourceList, limits corev1.ResourceList, err error) {
-    reqs, limits = corev1.ResourceList{}, corev1.ResourceList{}
-    for _, pod := range podList.Items {
-        for _, container := range pod.Spec.Containers {
-            AddResourceList(reqs, container.Resources.Requests)
-            AddResourceList(limits, container.Resources.Limits)
-        }
+	reqs, limits = corev1.ResourceList{}, corev1.ResourceList{}
+	for _, pod := range podList.Items {
+		for _, container := range pod.Spec.Containers {
+			AddResourceList(reqs, container.Resources.Requests)
+			AddResourceList(limits, container.Resources.Limits)
+		}
 
-        for _, container := range pod.Spec.InitContainers {
-            AddResourceList(reqs, container.Resources.Requests)
-            AddResourceList(limits, container.Resources.Limits)
-        }
-    }
-    return
+		for _, container := range pod.Spec.InitContainers {
+			AddResourceList(reqs, container.Resources.Requests)
+			AddResourceList(limits, container.Resources.Limits)
+		}
+	}
+	return
 }
 
-func updateNodesIdleResource(podList *corev1.PodList, nodesCPUIdleMilli map[string]int64, nodesMemoryFreeMega map[string]int64) (err error) {
-    for _, pod := range podList.Items {
-        nodeName := pod.Spec.NodeName
-        if nodeName == "" {
-            continue
-        }
-        for _, container := range pod.Spec.Containers {
-            nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
-            nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
-        }
+func updateNodesIdleResource(tfJobClient tfjobclient.Interface, podList *corev1.PodList, nodesCPUIdleMilli map[string]int64, nodesMemoryFreeMega map[string]int64, nodesGPUIdleNum map[string]int, nodeBatchSize map[string]int) (err error) {
+	var GpuReqLimNum resource.Quantity
+	var tfJobBatchSize int = 0
+	for _, pod := range podList.Items {
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			continue
+		}
 
-        for _, container := range pod.Spec.InitContainers {
-            nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
-            nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
-        }
-    }
-    return
+		tfJobName := pod.ObjectMeta.Labels["tf_job_name"]
+		if tfJobName != "" {
+			tfJobNamespace := pod.ObjectMeta.Namespace
+
+			//tfJob *v1alpha1.TFJob
+			tfJob, err := tfJobClient.KubeflowV1alpha1().TFJobs(tfJobNamespace).Get(tfJobName, meta_v1.GetOptions{})
+			if err != nil {
+				log.Info("cannot find the tfjob: ", tfJobName)
+			}
+			tfJobBatchSize = tfJob.Spec.BatchSize
+		} else {
+			tfJobBatchSize = 0
+		}
+
+		for _, container := range pod.Spec.Containers {
+			nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+			nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+
+			GpuReqLimNum.Set(0)
+			containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
+			GpuReqLimNum.Add(containerGpu)
+			nodesGPUIdleNum[nodeName] -= int(GpuReqLimNum.Value())
+
+			nodeBatchSize[nodeName] += tfJobBatchSize
+
+		}
+
+		for _, container := range pod.Spec.InitContainers {
+			nodesCPUIdleMilli[nodeName] -= container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+			nodesMemoryFreeMega[nodeName] -= container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+		}
+
+	}
+	return
 }
 
-/*** from kubernetes/autoscaler 
+/*** from kubernetes/autoscaler
 // GpuRequestInfo contains an information about a set of pods requesting a GPU.
 type GpuRequestInfo struct {
     // MaxRequest is maximum GPU request among pods
@@ -154,11 +175,116 @@ type GpuRequestInfo struct {
 }
 ***/
 
+// SyncResource will update free and total resources in k8s cluster.
+func (c *Cluster) SyncResource(tfJobClient tfjobclient.Interface) (res ClusterResource, err error) {
+
+	nodes := c.clientset.CoreV1().Nodes()
+	nodeList, err := nodes.List(metav1.ListOptions{})
+	if err != nil {
+		return ClusterResource{}, err
+	}
+
+	allocatable := make(corev1.ResourceList)
+	nodesCPUIdleMilli := make(map[string]int64)
+	nodesMemoryFreeMega := make(map[string]int64)
+	nodesGPUIdleNum := make(map[string]int)
+	nodeBatchSize := make(map[string]int)
+
+	//calculate total resource of each node
+	var GPUTotalNum resource.Quantity
+	for _, node := range nodeList.Items {
+		GPUTotalNum.Set(0)
+
+		//CPU
+		nodesCPUIdleMilli[node.GetObjectMeta().GetName()] =
+			node.Status.Allocatable.Cpu().ScaledValue(resource.Milli)
+
+		//Mem
+		nodesMemoryFreeMega[node.GetObjectMeta().GetName()] =
+			node.Status.Allocatable.Memory().ScaledValue(resource.Mega)
+
+		//GPU
+		nodeGpu := node.Status.Allocatable[ResourceNvidiaGPU]
+		GPUTotalNum.Add(nodeGpu)
+		nodesGPUIdleNum[node.GetObjectMeta().GetName()] = int(GPUTotalNum.Value())
+
+		//BatchSize
+		nodeBatchSize[node.GetObjectMeta().GetName()] = 0
+
+		AddResourceList(allocatable, node.Status.Allocatable)
+	}
+
+	// Get non-terminated pods from all namespaces.
+	namespace := ""
+
+	// FIXME(typhoonzero): scan all pods is not a efficient way.
+	// NOTE: pending pods need to be caculated for scale down.
+	// NOTE: "terminating" pods' status is still running, do not
+	// scale up/down the job if job is still at last scaling
+	// process.
+	fieldSelector, err := fields.ParseSelector("status.phase!=" + string(api.PodSucceeded) + ",status.phase!=" + string(api.PodFailed))
+	if err != nil {
+		return ClusterResource{}, err
+	}
+
+	allPodsList, err := c.clientset.CoreV1().Pods(namespace).List(metav1.ListOptions{FieldSelector: fieldSelector.String()})
+
+	if err != nil {
+		return ClusterResource{}, err
+	}
+
+	allReqs, allLimits, err := getPodsTotalRequestsAndLimits(allPodsList)
+	if err != nil {
+		return ClusterResource{}, err
+	}
+
+	err = updateNodesIdleResource(tfJobClient, allPodsList, nodesCPUIdleMilli, nodesMemoryFreeMega, nodesGPUIdleNum, nodeBatchSize)
+
+	if err != nil {
+		return ClusterResource{}, err
+	}
+
+	// calculate GPU total requet
+	var GPUReqLimNum resource.Quantity
+
+	for _, pod := range allPodsList.Items {
+		for _, container := range pod.Spec.Containers {
+			if container.Resources.Requests != nil {
+				containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
+				GPUReqLimNum.Add(containerGpu)
+			}
+		}
+	}
+
+	res = ClusterResource{
+		NodeCount:       len(nodeList.Items),
+		GPUTotal:        int(GPUTotalNum.Value()), //int(allocatable.NvidiaGPU().Value())
+		CPUTotalMilli:   allocatable.Cpu().ScaledValue(resource.Milli),
+		MemoryTotalMega: allocatable.Memory().ScaledValue(resource.Mega),
+
+		GPURequest:        int(GPUReqLimNum.Value()), //int(allReqs.NvidiaGPU().Value()) // useless
+		CPURequestMilli:   allReqs.Cpu().ScaledValue(resource.Milli),
+		MemoryRequestMega: allReqs.Memory().ScaledValue(resource.Mega),
+
+		GPULimit:        int(GPUReqLimNum.Value()), //int(allLimits.NvidiaGPU().Value()) // only GPU limits has meaning.
+		CPULimitMilli:   allLimits.Cpu().ScaledValue(resource.Milli),
+		MemoryLimitMega: allLimits.Memory().ScaledValue(resource.Mega),
+
+		NodeInfos: NodeInfos{
+			NodesCPUIdleMilli:   nodesCPUIdleMilli,
+			NodesMemoryFreeMega: nodesMemoryFreeMega,
+			NodesGPUIdleNum:     nodesGPUIdleNum,
+			NodeBatchSize:       nodeBatchSize,
+		},
+	}
+	return
+}
+
 /*** from kubernetes/autoscaler ***/
 // GetGpuRequests returns a GpuRequestInfo for each type of GPU requested by
 // any pod in pods argument. If the pod requests GPU, but doesn't specify what
 // type of GPU it wants (via NodeSelector) it assumes it's DefaultGPUType.
-func GetGpuRequests(podList *corev1.PodList) (GpuReqLimNum resource.Quantity){
+/*func GetGpuRequests(podList *corev1.PodList) (GpuReqLimNum resource.Quantity) {
     //result := make(map[string]GpuRequestInfo)
     //var GpuReqLimNum resource.Quantity
 
@@ -172,140 +298,39 @@ func GetGpuRequests(podList *corev1.PodList) (GpuReqLimNum resource.Quantity){
     }
 
     /*
-    for _, pod := range pods {
-        var podGpu resource.Quantity
-        for _, container := range pod.Spec.Containers {
-            if container.Resources.Requests != nil {
-                containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
-                podGpu.Add(containerGpu)
-            }
-        }
-        if podGpu.Value() == 0 {
-            continue
-        }
+       for _, pod := range pods {
+           var podGpu resource.Quantity
+           for _, container := range pod.Spec.Containers {
+               if container.Resources.Requests != nil {
+                   containerGpu := container.Resources.Requests[ResourceNvidiaGPU]
+                   podGpu.Add(containerGpu)
+               }
+           }
+           if podGpu.Value() == 0 {
+               continue
+           }
 
-        gpuType := DefaultGPUType
-        if gpuTypeFromSelector, found := pod.Spec.NodeSelector[GPULabel]; found {
-            gpuType = gpuTypeFromSelector
-        }
+           gpuType := DefaultGPUType
+           if gpuTypeFromSelector, found := pod.Spec.NodeSelector[GPULabel]; found {
+               gpuType = gpuTypeFromSelector
+           }
 
-        requestInfo, found := result[gpuType]
-        if !found {
-            requestInfo = GpuRequestInfo{
-                MaxRequest: podGpu,
-                Pods:       make([]*apiv1.Pod, 0),
-                SystemLabels: map[string]string{
-                    GPULabel: gpuType,
-                },
-            }
-        }
-        if podGpu.Cmp(requestInfo.MaxRequest) > 0 {
-            requestInfo.MaxRequest = podGpu
-        }
-        requestInfo.Pods = append(requestInfo.Pods, pod)
-        result[gpuType] = requestInfo
-    }*/
+           requestInfo, found := result[gpuType]
+           if !found {
+               requestInfo = GpuRequestInfo{
+                   MaxRequest: podGpu,
+                   Pods:       make([]*apiv1.Pod, 0),
+                   SystemLabels: map[string]string{
+                       GPULabel: gpuType,
+                   },
+               }
+           }
+           if podGpu.Cmp(requestInfo.MaxRequest) > 0 {
+               requestInfo.MaxRequest = podGpu
+           }
+           requestInfo.Pods = append(requestInfo.Pods, pod)
+           result[gpuType] = requestInfo
+       }
     return
 }
-
-
-
-// SyncResource will update free and total resources in k8s cluster.
-func (c *Cluster) SyncResource() (res ClusterResource, err error) {
-
-    nodes := c.clientset.CoreV1().Nodes()
-    nodeList, err := nodes.List(metav1.ListOptions{})
-    if err != nil {
-        return ClusterResource{}, err
-    }
-
-    allocatable := make(corev1.ResourceList)
-    nodesCPUIdleMilli := make(map[string]int64)
-    nodesMemoryFreeMega := make(map[string]int64)
-
-    for _, node := range nodeList.Items {
-        nodesCPUIdleMilli[node.GetObjectMeta().GetName()] =
-            node.Status.Allocatable.Cpu().ScaledValue(resource.Milli)
-        nodesMemoryFreeMega[node.GetObjectMeta().GetName()] =
-            node.Status.Allocatable.Memory().ScaledValue(resource.Mega)
-        AddResourceList(allocatable, node.Status.Allocatable)
-    }
-
-    // Get non-terminated pods from all namespaces.
-    namespace := ""
-
-    // FIXME(typhoonzero): scan all pods is not a efficient way.
-    // NOTE: pending pods need to be caculated for scale down.
-    // NOTE: "terminating" pods' status is still running, do not
-    // scale up/down the job if job is still at last scaling
-    // process.
-    fieldSelector, err := fields.ParseSelector("status.phase!=" + string(api.PodSucceeded) + ",status.phase!=" + string(api.PodFailed))
-    if err != nil {
-        return ClusterResource{}, err
-    }
-
-    allPodsList, err := c.clientset.CoreV1().Pods(namespace).List(metav1.ListOptions{FieldSelector: fieldSelector.String()})
-
-    if err != nil {
-        return ClusterResource{}, err
-    }
-
-    allReqs, allLimits, err := getPodsTotalRequestsAndLimits(allPodsList)
-    if err != nil {
-        return ClusterResource{}, err
-    }
-
-    /*** 待修改 換方法計算GPU數量 ***/
-    var GPUTotalNum resource.Quantity
-
-    for _, node := range nodeList.Items {
-        nodeGpu := node.Status.Allocatable[ResourceNvidiaGPU]
-        GPUTotalNum.Add(nodeGpu)
-    }
-
-    GPUReqLimNum := GetGpuRequests(allPodsList)
-    
-    log.Info("Cluster total GPU: %v",   int(GPUTotalNum.Value()))
-    log.Info("Cluster all Req GPU: %v", int(GPUReqLimNum.Value()))
-
-    // node.Status.Allocatable[ResourceNvidiaGPU]
-    /*** 待修改 換方法計算GPU數量 ***/
-
-
-
-
-
-    err = updateNodesIdleResource(allPodsList, nodesCPUIdleMilli, nodesMemoryFreeMega)
-
-    if err != nil {
-        return ClusterResource{}, err
-    }
-
-
-
-    res = ClusterResource{
-        NodeCount:       len(nodeList.Items),
-        GPUTotal:        int(GPUTotalNum.Value()), //int(allocatable.NvidiaGPU().Value())
-        CPUTotalMilli:   allocatable.Cpu().ScaledValue(resource.Milli),
-        MemoryTotalMega: allocatable.Memory().ScaledValue(resource.Mega),
-
-        GPURequest:        int(GPUReqLimNum.Value()),   //int(allReqs.NvidiaGPU().Value()) // useless
-        CPURequestMilli:   allReqs.Cpu().ScaledValue(resource.Milli),
-        MemoryRequestMega: allReqs.Memory().ScaledValue(resource.Mega),
-
-        GPULimit:        int(GPUReqLimNum.Value()),  //int(allLimits.NvidiaGPU().Value()) // only GPU limits has meaning. 
-        CPULimitMilli:   allLimits.Cpu().ScaledValue(resource.Milli),
-        MemoryLimitMega: allLimits.Memory().ScaledValue(resource.Mega),
-
-        NodeInfos: NodeInfos{
-            NodesCPUIdleMilli:   nodesCPUIdleMilli,
-            NodesMemoryFreeMega: nodesMemoryFreeMega,
-        },
-    }
-    return
-}
-
-
-
-
-
+*/

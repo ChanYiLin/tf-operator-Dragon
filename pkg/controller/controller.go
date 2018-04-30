@@ -18,7 +18,7 @@ package controller
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"reflect"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -73,7 +73,25 @@ type ClusterResource struct {
 type NodeInfos struct {
 	NodesCPUIdleMilli   map[string]int64
 	NodesMemoryFreeMega map[string]int64
+	NodesGPUIdleNum     map[string]int
+	NodeBatchSize       map[string]int
 }
+
+type jobWorkerRequest struct {
+	JobName         string
+	WorkerReplicas  int
+	WorkerCPUReq    int64
+	WorkerMemReq    int64
+	WorkerGPUReq    int
+	WorkerBatchSize int
+}
+
+type QueueJobs struct {
+	Key   string
+	Value *trainer.TrainingJob
+}
+
+type QueueJobsList []QueueJobs
 
 /*** Jack Lin  ***/
 
@@ -133,454 +151,26 @@ type Controller struct {
 	enableGangScheduling bool
 
 	/*** Jack Lin ***/
+	scheduleQueueJob QueueJobsList
+	runningQueueJob  QueueJobsList
+
 	cluster *Cluster
+
 	/*** Jack Lin ***/
 
 }
 
-/*** Jack Lin  ***/
-
-// elastic job filter.
-//func elastic(j job) bool {
-//	return j.Config.Elastic()
-//}
-
-// gpu job filter.
-//func gpu(j job) bool {
-//	return j.Config.NeedGPU()
-//}
-
-//type ComparedJobs []*trainer.TrainingJob
-
-type ComparedJobs struct {
-	Key   string
-	Value *trainer.TrainingJob
+func RemoveIndex(s QueueJobsList, index int) QueueJobsList {
+	return append(s[:index], s[index+1:]...)
 }
 
-type ComparedJobsList []ComparedJobs
-
-func Fulfillment(j ComparedJobs) float64 {
-	//minInstance := j.Config.Spec.Trainer.MinInstance
-	//maxInstance := j.Config.Spec.Trainer.MaxInstance
-
-	jobA := j.Value.GetJob()
-	minInstance := jobA.Spec.MinInstance
-	maxInstance := jobA.Spec.MaxInstance
-
-	if minInstance == maxInstance {
-		return 1
-	}
-
-	var curInstance int
-
-	jobAReplicasSetList := j.Value.GetJobReplicasSetList()
-
-	for _, t := range jobAReplicasSetList {
-		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
-			tReplicasSetSpec := t.GetReplicasSetSpec()
-			curInstance = int(*tReplicasSetSpec.Replicas)
-			log.Info("in Fulfillment: curInstance: %v", curInstance)
-			break
-		}
-	}
-
-	//curInstance := int(*j.TrainerJob.Spec.Parallelism)
-
-	return float64(curInstance-minInstance) / float64(maxInstance-minInstance)
+func Insert(slice interface{}, pos int, value interface{}) interface{} {
+	v := reflect.ValueOf(slice)
+	v = reflect.Append(v, reflect.ValueOf(value))
+	reflect.Copy(v.Slice(pos+1, v.Len()), v.Slice(pos, v.Len()))
+	v.Index(pos).Set(reflect.ValueOf(value))
+	return v.Interface()
 }
-
-func (j ComparedJobsList) Len() int {
-	return len(j)
-}
-
-func (j ComparedJobsList) Less(a int, b int) bool {
-	scoreA := Fulfillment(j[a])
-	scoreB := Fulfillment(j[b])
-
-	jobAReplicasSetList := j[a].Value.GetJobReplicasSetList()
-	jobBReplicasSetList := j[b].Value.GetJobReplicasSetList()
-
-	var jAReplicasSet *trainer.TFReplicaSet
-	var jBReplicasSet *trainer.TFReplicaSet
-
-	log.Info("in Sort Less: scoreA: %v, scoreB: %v", scoreA, scoreB)
-	if scoreA == scoreB {
-
-		for _, t := range jobAReplicasSetList {
-			if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
-				jAReplicasSet = t
-				break
-			}
-		}
-
-		for _, k := range jobBReplicasSetList {
-			if k.Spec.TFReplicaType == tfv1alpha1.WORKER {
-				jBReplicasSet = k
-				break
-			}
-		}
-
-		jAReplicasSetSpec := jAReplicasSet.GetReplicasSetSpec()
-		jBReplicasSetSpec := jBReplicasSet.GetReplicasSetSpec()
-
-		//resA := j[a].Config.Spec.Trainer.Resources
-		//resB := j[b].Config.Spec.Trainer.Resources
-		//log.Info("resA has GPU limits %v")
-		var resARequestsCPU resource.Quantity
-		var resARequestsMem resource.Quantity
-		var resALimitsGPU resource.Quantity
-
-		var resBRequestsCPU resource.Quantity
-		var resBRequestsMem resource.Quantity
-		var resBLimitsGPU resource.Quantity
-
-		for _, container := range jAReplicasSetSpec.Template.Spec.Containers {
-			log.Info("In sort jAReplicasSet Container: %v", container.Name)
-			tmpCPU := *container.Resources.Requests.Cpu()
-			resARequestsCPU.Add(tmpCPU)
-
-			tmpMem := *container.Resources.Requests.Memory()
-			resARequestsMem.Add(tmpMem)
-
-			tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
-			resALimitsGPU.Add(tmpGpu)
-
-		}
-
-		for _, container := range jBReplicasSetSpec.Template.Spec.Containers {
-			log.Info("In sort jBReplicasSet Container: %v", container.Name)
-			tmpCPU := *container.Resources.Requests.Cpu()
-			resBRequestsCPU.Add(tmpCPU)
-
-			tmpMem := *container.Resources.Requests.Memory()
-			resBRequestsMem.Add(tmpMem)
-
-			tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
-			resBLimitsGPU.Add(tmpGpu)
-
-		}
-
-		//resALimitsGPU := jA.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
-		//resBLimitsGPU := jB.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
-		//log.Info("resA resB has GPU limits %v / %v", int(resALimitsGPU.Value()), int(resBLimitsGPU.Value()))
-
-		if resALimitsGPU.Cmp(resBLimitsGPU) == 0 {
-			if resARequestsCPU.Cmp(resBRequestsCPU) == 0 {
-				return resARequestsMem.Cmp(resBRequestsMem) == -1
-			}
-			return resARequestsCPU.Cmp(resBRequestsCPU) == -1
-		}
-		return resALimitsGPU.Cmp(resBLimitsGPU) == -1
-	}
-	return scoreA < scoreB
-}
-
-func (j ComparedJobsList) Swap(a int, b int) {
-	j[a], j[b] = j[b], j[a]
-}
-
-// sortedJobs return the names of sorted jobs by fulfillment and
-// tiebreakers in ascending order.
-func sortedJobs(j map[string]*trainer.TrainingJob) ComparedJobsList {
-	//var js jobs
-	js := make(ComparedJobsList, len(j))
-	i := 0
-	for k, v := range j {
-		js[i] = ComparedJobs{k, v}
-		i++
-	}
-	/*nextJob:
-	for _, v := range j {
-		for _, f := range filters {
-			if !f(v) {
-				continue nextJob
-			}
-		}
-		js = append(js, v)
-	}
-	*/
-	sort.Sort(js)
-	log.Info("in sortedJobs sorted js: %v", js)
-	return js
-}
-
-type Pair struct {
-	Key   string
-	Value int
-}
-
-type PairList []Pair
-
-func (p PairList) Len() int           { return len(p) }
-func (p PairList) Less(i, j int) bool { return p[i].Value < p[j].Value }
-func (p PairList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
-
-func sortedJobSufficiency(jobSufficiency map[string]int) PairList {
-	pl := make(PairList, len(jobSufficiency))
-	i := 0
-	for k, v := range jobSufficiency {
-		pl[i] = Pair{k, v}
-		i++
-	}
-	sort.Sort(sort.Reverse(pl))
-	return pl
-}
-
-func searchAssignableNode(r *ClusterResource, jA tfv1alpha1.TFReplicaSpec) (nodeName string) {
-	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
-		if jA.Template.Spec.Containers[0].Resources.Requests.Cpu().ScaledValue(resource.Milli) <= idle &&
-			jA.Template.Spec.Containers[0].Resources.Requests.Memory().ScaledValue(resource.Mega) <= r.NodeInfos.NodesMemoryFreeMega[name] {
-			return name
-		}
-	}
-	return ""
-}
-
-func scaleDryRun(r *ClusterResource, j *trainer.TrainingJob, curDiff int, scaleDown bool) (additional int) {
-	additionalGPUInstance := 0
-	additionalCPUInstance := 0
-
-	jobAReplicasSetList := j.GetJobReplicasSetList()
-	var jAReplicasSetSpec tfv1alpha1.TFReplicaSpec
-
-	log.Info("jobAReplicasSetList len: %v", len(jobAReplicasSetList))
-	workerFlag := false
-	for _, t := range jobAReplicasSetList {
-		log.Info("in scaleDryRun t.Spec.TFReplicaType: %v", t.Spec.TFReplicaType)
-		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
-			workerFlag = true
-			jAReplicasSetSpec = t.Spec
-			break
-		}
-	}
-
-	if workerFlag == false {
-		return
-	}
-
-	// tfv1alpha1.TFReplicaSpec
-	//jAReplicasSetSpec := jAReplicasSet.GetReplicasSetSpec()
-
-	log.Info("jAReplicasSetSpec TFReplicaType: %v", jAReplicasSetSpec.TFReplicaType)
-
-	//if(jAReplicasSet.Spec.Template.Containers == nil){
-	//	return
-	//}
-	var cpuRequestMilli int64
-	var memRequestMega int64
-	var gpuLimitNum resource.Quantity
-
-	for _, container := range jAReplicasSetSpec.Template.Spec.Containers {
-		log.Info("in scaleDryRun container info: %v", container)
-		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
-		memRequestMega += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
-		tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
-		gpuLimitNum.Add(tmpGpu)
-	}
-	//cpuRequestMilli := jAReplicasSet.Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().ScaledValue(resource.Milli)
-	//memRequestMega := jA.Template.Spec.Containers[0].Resources.Requests.Memory().ScaledValue(resource.Mega)
-	//gpuLimitNum := jA.Template.Spec.Containers[0].Resources.Requests[ResourceNvidiaGPU]
-
-	gpuLimit := int(gpuLimitNum.Value())
-
-	log.Info("pod need CPU %v, Mem %v, GPU %v", cpuRequestMilli, memRequestMega, gpuLimit)
-
-	nodeName := ""
-
-	// Adjust resource upon return.
-	defer func() {
-		r.GPULimit += gpuLimit * additional
-		r.CPURequestMilli += cpuRequestMilli * int64(additional)
-		r.MemoryRequestMega += memRequestMega * int64(additional)
-		if nodeName != "" {
-			r.NodeInfos.NodesCPUIdleMilli[nodeName] += cpuRequestMilli * int64(additional)
-			r.NodeInfos.NodesMemoryFreeMega[nodeName] += memRequestMega * int64(additional)
-		}
-	}()
-
-	jobA := j.GetJob()
-
-	// TODO(helin): j.TrainerJob.Spec.Parallelism may not reflect
-	// the actual pod running for the trainer job. We need to
-	// count the pod manually. And calculate the additional value
-	// based on the running pod count,
-	// j.TrainerJob.Spec.Parallelism, and curDiff.
-	plannedInstance := int(*jAReplicasSetSpec.Replicas) + curDiff
-	instanceMax := jobA.Spec.MaxInstance
-	instanceMin := jobA.Spec.MinInstance
-
-	// TODO(typhoonzero): refine below code to remove direction
-	// scaleDown when there is pending job.
-	// ======================= scaleDown ======================
-	if scaleDown {
-		if plannedInstance > instanceMin { // we want to remove extra pod for runnning job for the pending job
-			additional = -1
-			return
-		}
-		//gpuCondition := r.GPULimit > int(float64(r.GPUTotal)*maxLoadDesired)
-		cpuCondition := r.CPURequestMilli > int64(float64(r.CPUTotalMilli)*0.97)
-		if cpuCondition {
-			if plannedInstance > instanceMin {
-				additional = -1
-				return
-			}
-
-			// can not scale down further
-			additional = 0
-			return
-		}
-		// do not try to scale up
-		return
-	}
-	// ======================= scaleUp ==========================
-
-	if plannedInstance >= instanceMax {
-		// Do not scale or scale down, don't need to check if
-		// there are available free resources.
-		additional = instanceMax - plannedInstance
-		return
-	}
-
-	if r.MemoryTotalMega-r.MemoryRequestMega <= memRequestMega {
-		// insufficient memory, do not scale
-		additional = 0
-		return
-	}
-	if nodeName = searchAssignableNode(r, jAReplicasSetSpec); nodeName == "" {
-		additional = 0
-		return
-	}
-
-	// NOTE: do not scale up to use full cluster resource of CPU
-	//       but we do scale up for GPU.
-	if int64(float64(r.CPUTotalMilli)*0.97)-r.CPURequestMilli >= cpuRequestMilli {
-		additionalCPUInstance = 1
-	}
-
-	needGPU := gpuLimit > 0
-	if needGPU && r.GPUTotal-r.GPULimit >= gpuLimit {
-		additionalGPUInstance = 1
-	}
-
-	if needGPU {
-		if additionalGPUInstance < additionalCPUInstance {
-			additional = additionalGPUInstance
-		} else {
-			additional = additionalCPUInstance
-		}
-	} else {
-		additional = additionalCPUInstance
-	}
-
-	return
-}
-
-/*
-sorted = []ComparedJobs = ComparedJobsList
-type ComparedJobs struct {
-	Key string
-  	Value *trainer.TrainingJob
-}
-
-type Pair struct {
-  Key string
-  Value int
-}
-type PairList []Pair
-jobSufficiencySorted = []Pair
-jobSufficientSorted = []Pair
-
-*/
-
-func (c *Controller) scaleAllDryRun(r ClusterResource, jobs map[string]*trainer.TrainingJob, jobNotSufficient map[string]int, jobSufficient map[string]int) map[string]int {
-
-	diff := make(map[string]int)
-
-	sorted := sortedJobs(jobs)
-	jobNotSufficientSorted := sortedJobSufficiency(jobNotSufficient)
-
-	// to indicate the current job which is pending and we are giving the resource for it by scaling down running jobs.
-	currentAddJob := 0
-
-	for {
-
-		jobSufficientSorted := sortedJobSufficiency(jobSufficient)
-		noChange := true
-		surplus := 0
-
-		for _, j := range jobSufficientSorted {
-			surplus += j.Value // current surplus
-		}
-
-		log.Info("currentAddJob: ", currentAddJob, "& jobNotSufficientSorted: ", len(jobNotSufficientSorted))
-
-		if len(jobNotSufficientSorted) > 0 {
-			if currentAddJob >= len(jobNotSufficientSorted) {
-				break
-			}
-			// if the current surplus is not enough for the next job then
-			if surplus < (-jobNotSufficientSorted[currentAddJob].Value) {
-				break
-			}
-		}
-
-		dryRun := func(j *trainer.TrainingJob, isScaleDown bool) {
-			name := j.GetJob().ObjectMeta.GetName()
-			log.Info("scale dry run job: %v", name)
-
-			additional := scaleDryRun(&r, j, diff[name], isScaleDown)
-
-			log.Info(
-				"dry run scale job ",
-				" name ", name, " current scale difference ", diff[name],
-				" scale up number of instances ", additional, " cluster resource ", r,
-			)
-
-			jobSufficient[name] += additional
-			if additional == -1 {
-				if len(jobNotSufficientSorted) > 0 {
-					jobNotSufficientSorted[currentAddJob].Value += 1
-					// if the currentAddJob is sufficient then move to next job.
-					if jobNotSufficientSorted[currentAddJob].Value >= 0 {
-						currentAddJob += 1
-					}
-				}
-			}
-
-			diff[name] += additional
-
-			if additional != 0 {
-				noChange = false
-			}
-		}
-
-		log.Info("in scaleAllDryRun sorted: %v ", sorted)
-
-		// scale up from the ones that need scaling up the
-		// most.
-		for _, j := range sorted {
-			log.Info("in scaleAllDryRun scale up %v ", j.Key)
-			dryRun(j.Value, false)
-		}
-
-		if len(jobNotSufficientSorted) > 0 {
-			// scale down from the ones that need scaling up the
-			// least.
-			for i := len(sorted) - 1; i >= 0; i-- {
-				dryRun(sorted[i].Value, true)
-			}
-		}
-
-		if noChange {
-			break
-		}
-	}
-
-	return diff
-
-}
-
-/*** Jack Lin  ***/
 
 // New method sets up service client handles and returns controller object
 func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobclient.Interface,
@@ -614,8 +204,10 @@ func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobcli
 		config:               config,
 		enableGangScheduling: enableGangScheduling,
 		/*** Jack Lin ***/
-		cluster: cluster,
+		scheduleQueueJob: make(QueueJobsList, 0),
+		runningQueueJob:  make(QueueJobsList, 0),
 
+		cluster: cluster,
 		/*** Jack Lin ***/
 	}
 
@@ -716,6 +308,168 @@ func (c *Controller) processNextWorkItem() bool {
 	return true
 }
 
+// 尋找部署的node
+// 一個一個node填滿，全部填完return
+// 若一個node填不滿，自然會變成跨node執行。
+// 返回placementPlan {node1: 3, node2: 1}
+
+func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, map[string]int, string) {
+
+	var nodeCPUIdleMilli int64
+	var nodeMemFreeMega int64
+	var nodeGPUIdleNum int
+	var nodeBatchSize int
+
+	var testRes bool
+	placementPlan := make(map[string]int)
+	var PSPlace string
+
+	var workerCount int = jobWorker.WorkerReplicas
+	var flag bool = false
+
+	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
+
+		placementPlan[name] = 0
+		if name == "apollo25" {
+			continue
+		}
+		nodeCPUIdleMilli = idle
+		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
+		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
+		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+
+		log.Info("In buildPlacementPlan: all node")
+
+		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerReplicas+nodeBatchSize < 256) {
+			placementPlan[name] = jobWorker.WorkerReplicas
+			PSPlace = name
+			testRes = true
+			log.Info("=========")
+			log.Info("there is ONE NODE having enough resource for current job: ", jobWorker)
+			log.Info("placementPlan: ", placementPlan)
+			log.Info("=========")
+			return testRes, placementPlan, PSPlace
+		}
+
+	}
+
+	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
+		placementPlan[name] = 0
+		if name == "apollo25" {
+			continue
+		}
+		nodeCPUIdleMilli = idle
+		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
+		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
+		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+
+		log.Info("In buildPlacementPlan: single node")
+
+		for workerCount > 0 {
+			flag = false
+			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
+				log.Info("node:", name, "has enough resource for one worker.")
+				placementPlan[name] += 1
+				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
+				nodeMemFreeMega -= jobWorker.WorkerMemReq
+				nodeGPUIdleNum -= jobWorker.WorkerGPUReq
+				workerCount -= 1
+				log.Info("workerCount: ", workerCount)
+				flag = true
+			}
+			if flag == false {
+				break
+			}
+		}
+	}
+	var maxCount int = 0
+	log.Info("=========")
+	if workerCount > 0 {
+		log.Info("there is NO enough resource for current job: ", jobWorker)
+		log.Info(workerCount, " workers cannot be placed.")
+		log.Info("placementPlan: ", placementPlan)
+		PSPlace = ""
+		testRes = false
+	} else {
+		log.Info("there is YES enough resource for current job: ", jobWorker)
+		log.Info("placementPlan: ", placementPlan)
+		// find where do workers locate
+		for name, count := range placementPlan {
+			if count > maxCount {
+				maxCount = count
+				PSPlace = name
+			}
+		}
+		log.Info("PSPlace: ", PSPlace)
+		testRes = true
+	}
+	log.Info("=========")
+	log.Info("In buildPlacementPlan testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
+	return testRes, placementPlan, PSPlace
+}
+
+// scheduling:
+// - job level: cluster中執行的job越多越好
+//    (FIFO，因為滿足資源需求可以在下一個pod level來判斷，同時判斷其他的限制)
+//      - pod level:
+//         if 有一個node可以放進所有task且該node不會超過PCI限制，placementPlan {node1: 4} 全部放該node，return
+// 		   if 有跨node可以滿足，且兩邊的node都不會超過PCI限制，placementPlan {node1: 3, node2: 1}
+//         //if 無法滿足locality, PCI-E限制，退回job level選下一個
+//         else 換下一個job。
+// (先不實作)若這一輪沒有選出job，則執行scale-up來提高資源使用率。
+
+func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.TrainingJob) (bool, map[string]int, string) {
+
+	var testRes bool
+	placementPlan := make(map[string]int)
+	var PSPlace string
+
+	jobReplicasSetList := jobToBeTested.GetJobReplicasSetList()
+
+	var jobReplicasSetSpec tfv1alpha1.TFReplicaSpec
+	var workerFlag bool = false
+
+	for _, t := range jobReplicasSetList {
+		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			workerFlag = true
+			jobReplicasSetSpec = t.Spec
+			break
+		}
+	}
+
+	if workerFlag == false {
+		return false, placementPlan, ""
+	}
+
+	var cpuRequestMilli int64
+	var memRequestMega int64
+	var gpuRequestNum resource.Quantity
+
+	for _, container := range jobReplicasSetSpec.Template.Spec.Containers {
+		log.Info("in ScheduleTest Worker container info: %v", container)
+		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+		memRequestMega += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+		tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
+		gpuRequestNum.Add(tmpGpu)
+	}
+
+	gpuRequest := int(gpuRequestNum.Value())
+	jobWorkerReplicas := int(*jobReplicasSetSpec.Replicas)
+
+	log.Info("pod need CPU ", cpuRequestMilli, ", Mem ", memRequestMega, ", GPU ", gpuRequest, ", Replicas ", jobWorkerReplicas)
+
+	jobTemp := jobToBeTested.GetJob()
+	jobTempName := jobTemp.ObjectMeta.Name
+	jobTempBatchSize := jobTemp.Spec.BatchSize
+
+	jobWorker := jobWorkerRequest{JobName: jobTempName, WorkerReplicas: jobWorkerReplicas, WorkerCPUReq: cpuRequestMilli, WorkerMemReq: memRequestMega, WorkerGPUReq: gpuRequest, WorkerBatchSize: jobTempBatchSize}
+
+	testRes, placementPlan, PSPlace = buildPlacementPlan(r, jobWorker)
+	log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
+
+	return testRes, placementPlan, PSPlace
+}
+
 // syncTFJob will sync the job with the given. This function is not meant to be invoked
 // concurrently with the same key.
 //
@@ -780,115 +534,129 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	/*** Jack Lin  ***/
 	/***  Monitor the cluster resclusterource ***/
-	r, err := c.cluster.SyncResource()
+	r, err := c.cluster.SyncResource(c.TFJobClient)
 	if err != nil {
 		return false, err
 	}
 	log.Info("sync cluster resource done", "resource", r)
 	/*** Jack Lin  ***/
 
+	// scheduleQueueJob QueueJobsList
+	// runningQueueJob  QueueJobsList
+
 	nc := c.jobs[key]
 
-	if err := nc.Reconcile(&c.config, c.enableGangScheduling); err != nil {
+	/*** schedule ***/
+
+	// 1. init the job， setup runtime id and status，setupReplicas.
+
+	if err := nc.ArrivalSetup(&c.config); err != nil {
 		return false, err
 	}
 
-	/*** Jack Lin  ***/
-	/***  Get all jobs status ***/
+	tfJob, err = c.TFJobLister.TFJobs(ns).Get(name)
+	c.jobs[key].Update(tfJob)
 
-	havePending := false
-	for _, j := range c.jobs {
-		// k8s job for trainers may not be created immediently
-		// try sync it here
-		/*if j.TrainerJob == nil {
-			tj, err := a.cluster.GetTrainerJob(j.Config)
-			if err != nil {
-				log.Error(
-					"Error getting the trainer k8s job, will sync later.",
-					"name", j.Config.ObjectMeta.Name,
-					"error", err,
-				)
-				continue
-			}
-			j.TrainerJob = tj
-			a.jobs[key] = j
-		}*/
+	c.jobs[key] = nc
 
-		// j is a *trainer.TrainingJob a pointer to the trainer.TrainingJob
-		total, _, pending, err := c.cluster.JobPods(j)
+	// 2. put the job in the schedule queue.
 
-		if err != nil {
-			log.Error("check if job is running failed", "error", err)
-			continue
+	jobTemp := QueueJobs{Key: key, Value: c.jobs[key]}
+	log.Info(jobTemp)
+
+	var runningFlag bool = false
+	for _, j := range c.runningQueueJob {
+		if j.Key == key { // the job is in running
+			runningFlag = true
 		}
+	}
+	if runningFlag == false {
+		c.scheduleQueueJob = append(c.scheduleQueueJob, jobTemp)
+	}
 
-		if total == pending {
-			havePending = true
+	//c.runningQueueJob = append(c.runningQueueJob, QueueJobs{key, nc})
+
+	// 3. do the scheduling
+	//
+	// - job level: cluster中執行的job越多越好
+	//    (FIFO，因為滿足資源需求可以在下一個pod level來判斷，同時判斷其他的限制)
+	//      - pod level:
+	//         if 有一個node可以放進所有task且該node不會超過PCI限制，placementPlan {node1: 4} 全部放該node，return
+	// 		   if 有跨node可以滿足，且兩邊的node都不會超過PCI限制，placementPlan {node1: 3, node2: 1}
+	//         //if 無法滿足locality, PCI-E限制，退回job level選下一個
+	//         else 換下一個job。
+	// (先不實作)若這一輪沒有選出job，則執行scale-up來提高資源使用率。
+	//
+
+	//type QueueJobs struct {
+	//	Key   string
+	//	Value *trainer.TrainingJob
+	//}
+
+	//var jobToBeTested *trainer.TrainingJob
+	var jobToRun *trainer.TrainingJob
+	var jobKey string
+	var testRes bool
+	placementPlan := make(map[string]int)
+	var PSPlace string
+
+	for index, j := range c.scheduleQueueJob {
+
+		//jobToBeTested = *trainer.TrainingJob
+		//jobToBeTested = j.Value
+		//log.Info("We are now test job: ", jobToBeTested)
+
+		//jobTest := jobToBeTested.GetJob()
+		//c.jobs[key].GetJob()
+		log.Info("j.Key: ", j.Key)
+		log.Info("job name: ", c.jobs[j.Key].GetJob().ObjectMeta.Name)
+
+		jobReplicasSetList := c.jobs[j.Key].GetJobReplicasSetList()
+		log.Info("jobReplicasSetList: ", jobReplicasSetList)
+
+		// ScheduleTest test whether the job can run or not based on current cluster resource status
+		// placementPlan indicate the nodes on which pods of the job run.
+		// placementPlan: {node1: 3, node2: 1}
+		//   which means 3 pods of the job shoule be placed on node1
+		//   and 1 pod of the job shoule be placed on node2
+		testRes, placementPlan, PSPlace = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
+		if testRes == true {
+			jobToRun = c.jobs[j.Key]
+			jobKey = j.Key
+			c.scheduleQueueJob = RemoveIndex(c.scheduleQueueJob, index)
 			break
+		} else {
+			jobToRun = nil
+		}
+
+	}
+
+	log.Info("testRes", testRes, placementPlan, PSPlace)
+	if testRes == true {
+		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
+		c.runningQueueJob = append(c.runningQueueJob, jobTemp)
+
+		if err := jobToRun.CreatePodsAndRunJob(&c.config, c.enableGangScheduling, placementPlan, PSPlace); err != nil {
+			return false, err
+		}
+
+	}
+
+	for _, j := range c.runningQueueJob {
+		if err := j.Value.Reconcile(); err != nil {
+			return false, err
 		}
 	}
 
-	js := make(map[string]*trainer.TrainingJob)
-	jobSufficient := make(map[string]int)
-	jobNotSufficient := make(map[string]int)
-	for key, j := range c.jobs {
-		// k8s job for trainers may not be created immediently
-		// try sync it here
-		/*if j.TrainerJob == nil {
-			tj, err := a.cluster.GetTrainerJob(j.Config)
-			if err != nil {
-				log.Error(
-					"Error getting the trainer k8s job, will sync later.",
-					"name", j.Config.ObjectMeta.Name,
-					"error", err,
-				)
-				continue
-			}
-			j.TrainerJob = tj
-			a.jobs[key] = j
-		}*/
+	/*** Jack Lin  ***/
+	/*** auto-scale ***/
 
-		total, running, pending, err := c.cluster.JobPods(j)
-		if err != nil {
-			log.Error("check if job is running failed", "error", err)
-			continue
-		}
+	//diff := c.autoScale(r)
 
-		log.Info(
-			"job info ",
-			"name ", key,
-			"running ", running,
-			"pending ", pending,
-			"total ", total,
-		)
-
-		jobTmp := c.jobs[key].GetJob()
-
-		if running-jobTmp.Spec.MinInstance < 0 {
-			jobNotSufficient[key] = running - jobTmp.Spec.MinInstance
-		}
-
-		if running-jobTmp.Spec.MinInstance > 0 {
-			jobSufficient[key] = running - jobTmp.Spec.MinInstance
-		}
-
-		// Scale jobs only when all pods' "Phase" are
-		// running, or some job is pending.
-		if total == running || havePending {
-			log.Info("jog", key, "is append into js")
-			js[key] = j
-			//js = append(js, j)
-		}
-	}
-
-	/***  Scale Plan ***/
-	diff := c.scaleAllDryRun(r, js, jobNotSufficient, jobSufficient)
-
-	log.Info("Scale Plan %v", diff)
-	log.Info("Congrats!!!")
+	//log.Info("Scale Plan %v", diff)
+	//log.Info("Congrats!!!")
 	/*** Jack Lin  ***/
 
-	// TODO(jlewi): Why do we issue a get request again here?
 	tfJob, err = c.TFJobClient.KubeflowV1alpha1().TFJobs(tfJob.ObjectMeta.Namespace).Get(tfJob.ObjectMeta.Name, metav1.GetOptions{})
 
 	if err != nil {

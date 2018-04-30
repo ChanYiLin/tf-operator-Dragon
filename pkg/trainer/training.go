@@ -109,9 +109,10 @@ func NewJob(kubeCli kubernetes.Interface, tfJobClient tfjobclient.Interface, rec
 
 /*** Jack Lin***/
 func (j *TrainingJob) GetJobReplicasSetList() []*TFReplicaSet {
-	//log.Info("in GetJobReplicasSetList")
-	//log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
-	//log.Info("j.Replicas: %v", j.Replicas)
+	log.Info("in GetJobReplicasSetList")
+	log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
+	log.Info("j.Replicas: %v", j.Replicas)
+
 	return j.Replicas
 }
 
@@ -304,6 +305,7 @@ func (j *TrainingJob) setup(config *tfv1alpha1.ControllerConfig) {
 
 // // setupReplicas creates in memory data structures corresponding to the replicas.
 func (j *TrainingJob) setupReplicas() error {
+	log.Info("in setupReplicas: ")
 	if len(j.Replicas) != len(j.job.Spec.ReplicaSpecs) {
 		j.Replicas = make([]*TFReplicaSet, 0, len(j.job.Spec.ReplicaSpecs))
 		for _, t := range j.job.Spec.ReplicaSpecs {
@@ -365,9 +367,12 @@ func (j *TrainingJob) updateCRDStatus() error {
 	return nil
 }
 
-// Reconcile tries to get the job into the desired state.
-func (j *TrainingJob) Reconcile(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool) error {
-	// TODO(jlewi): This doesn't seem to be a reliable way to detect deletion.
+/*** Jack Lin ***/
+/*
+* When a job arrive and before enqueued into scheduleQueueJob
+*
+ */
+func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 	if j.job.ObjectMeta.DeletionTimestamp != nil {
 		j.contextLogger.Info("Deletion timestamp set; skipping reconcile")
 		// Job is in the process of being deleted so do nothing.
@@ -396,6 +401,12 @@ func (j *TrainingJob) Reconcile(config *tfv1alpha1.ControllerConfig, enableGangS
 		}
 		return err
 	}
+	log.Info("in ArrivalSetup finish")
+	return nil
+}
+
+// when the job is selected and put into running queue, then create the pods of the job for real running
+func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool, placementPlan map[string]int, PSPlace string) error {
 
 	// sync PDB for gang scheduling
 	// TODO(mitake): replace PDB with a newer mechanism if it is replaced
@@ -410,7 +421,7 @@ func (j *TrainingJob) Reconcile(config *tfv1alpha1.ControllerConfig, enableGangS
 	if j.status.Phase == tfv1alpha1.TFJobPhaseCreating || j.status.Phase == tfv1alpha1.TFJobPhaseRunning {
 		// sync pods
 		for _, rc := range j.Replicas {
-			err := rc.SyncPods()
+			err := rc.SyncPods(placementPlan, PSPlace, rc.Spec.TFReplicaType)
 			if err != nil {
 				j.contextLogger.Errorf("SyncPods error: %v", err)
 			}
@@ -429,6 +440,12 @@ func (j *TrainingJob) Reconcile(config *tfv1alpha1.ControllerConfig, enableGangS
 		j.contextLogger.Warningf("Job %v; failed to update status error: %v", j.job.ObjectMeta.Name, err)
 		return err
 	}
+	return nil
+
+}
+
+// Reconcile tries to get the job into the desired state.
+func (j *TrainingJob) Reconcile() error {
 
 	// Call GetStatus in each reconcile loop
 	state, replicaStatuses, err := j.GetStatus()
@@ -514,6 +531,9 @@ func (j *TrainingJob) syncPdb() error {
 		ObjectMeta: meta_v1.ObjectMeta{
 			//GenerateName: "tf-job-pdb-",
 			Name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
+			OwnerReferences: []meta_v1.OwnerReference{
+				helper.AsOwner(j.job),
+			},
 		},
 		Spec: v1beta1.PodDisruptionBudgetSpec{
 			MinAvailable: &minAvailable,
@@ -525,21 +545,6 @@ func (j *TrainingJob) syncPdb() error {
 			},
 		},
 	}
-
-	/*
-		options := meta_v1.ListOptions{
-			name: "tf-job-pdb-" + j.job.ObjectMeta.Name,
-		}
-
-		// List to get pods
-		pdbl, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(s.Job.job.ObjectMeta.Namespace).List(options)
-		if err != nil {
-			return err
-		}
-
-		if len(pdbl) {
-
-		}*/
 
 	createdPdb, err := j.KubeCli.PolicyV1beta1().PodDisruptionBudgets(j.job.ObjectMeta.Namespace).Create(pdb)
 	if err != nil {

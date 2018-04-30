@@ -122,7 +122,6 @@ func (s *TFReplicaSet) GetReplicasSetSpec() tfv1alpha1.TFReplicaSpec {
 	return s.Spec
 }
 
-
 func (s *TFReplicaSet) GetPodStatus() (running, pending int, err error) {
 
 	selector, err := s.Labels().ToSelector()
@@ -133,7 +132,7 @@ func (s *TFReplicaSet) GetPodStatus() (running, pending int, err error) {
 	// List to get pods of the job.
 	pl, err := s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).List(options)
 	if err != nil {
-		return 0, 0 ,err
+		return 0, 0, err
 	}
 	s.contextLogger.Infof("Get Pod List in namespace=%v LabelSelector=%v", s.Job.job.ObjectMeta.Namespace, options.LabelSelector)
 
@@ -152,7 +151,6 @@ func (s *TFReplicaSet) GetPodStatus() (running, pending int, err error) {
 
 	return
 }
-
 
 // Labels returns the labels for this replica set.
 func (s *TFReplicaSet) Labels() KubernetesLabels {
@@ -206,7 +204,7 @@ func (s *TFReplicaSet) CreateServiceWithIndex(index int32) (*v1.Service, error) 
 }
 
 // CreatePodWithIndex will create a new pod with specify index
-func (s *TFReplicaSet) CreatePodWithIndex(index int32) (*v1.Pod, error) {
+func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string) (*v1.Pod, error) {
 	taskLabels := s.LabelsByIndex(index)
 
 	pod := &v1.Pod{
@@ -221,6 +219,7 @@ func (s *TFReplicaSet) CreatePodWithIndex(index int32) (*v1.Pod, error) {
 	}
 
 	pod.Spec.SchedulerName = s.Job.SchedulerName()
+	pod.Spec.NodeSelector["nodeName"] = name
 
 	// Configure the TFCONFIG environment variable.
 	tfConfig := TFConfig{
@@ -453,7 +452,13 @@ func (s *TFReplicaSet) GetStatus() (tfv1alpha1.TFReplicaStatus, error) {
 }
 
 // SyncPods will try to check current pods for this TFReplicaSet and try to make it as desired.
-func (s *TFReplicaSet) SyncPods() error {
+func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, replicaType tfv1alpha1.TFReplicaType) error {
+
+	localPlacementPlan := make(map[string]int)
+	for k, v := range placementPlan {
+		localPlacementPlan[k] = v
+	}
+
 	for index := int32(0); index < *s.Spec.Replicas; index++ {
 
 		// Label to get all pods of this TFReplicaType + index
@@ -480,21 +485,48 @@ func (s *TFReplicaSet) SyncPods() error {
 
 		if len(pl.Items) == 0 {
 			s.contextLogger.Infof("Job %s missing pod for replica %s index %s, creating a new one.", s.Job.name(), string(s.Spec.TFReplicaType), index)
-			// Create the pod
-			createdPod, err := s.CreatePodWithIndex(index)
 
-			// If the pod already exists do nothing.
-			if err != nil {
-				if k8s_errors.IsAlreadyExists(err) {
-					s.contextLogger.Infof("Pod: %v already exists.", createdPod.ObjectMeta.Name)
-					continue
+			// Create Worker pod
+			if replicaType == tfv1alpha1.WORKER {
+				// find the node for the pod.
+				// if found the node then break to next pod
+				for name, count := range localPlacementPlan {
+					if count > 0 {
+						createdPod, err := s.CreatePodWithIndex(index, name)
+
+						// If the pod already exists do nothing.
+						if err != nil {
+							if k8s_errors.IsAlreadyExists(err) {
+								s.contextLogger.Infof("Pod: %v already exists.", createdPod.ObjectMeta.Name)
+								break
+							}
+							s.recorder.Eventf(s.Job.job, v1.EventTypeWarning, FailedCreateReason, "Error creating: %v", err)
+							return k8sErrors.NewAggregate([]error{fmt.Errorf("Creating pod %v returned error.", createdPod.ObjectMeta.Name), err})
+						}
+
+						s.recorder.Eventf(s.Job.job, v1.EventTypeNormal, SuccessfulCreateReason, "Created pod: %v", createdPod.Name)
+						localPlacementPlan[name] -= 1
+						break
+					}
 				}
-				s.recorder.Eventf(s.Job.job, v1.EventTypeWarning, FailedCreateReason, "Error creating: %v", err)
-				return k8sErrors.NewAggregate([]error{fmt.Errorf("Creating pod %v returned error.", createdPod.ObjectMeta.Name), err})
 			}
 
-			s.recorder.Eventf(s.Job.job, v1.EventTypeNormal, SuccessfulCreateReason, "Created pod: %v", createdPod.Name)
-			continue
+			// Create PS pod
+			if replicaType == tfv1alpha1.PS {
+				createdPod, err := s.CreatePodWithIndex(index, PSPlace)
+
+				// If the pod already exists do nothing.
+				if err != nil {
+					if k8s_errors.IsAlreadyExists(err) {
+						s.contextLogger.Infof("Pod: %v already exists.", createdPod.ObjectMeta.Name)
+						continue
+					}
+					s.recorder.Eventf(s.Job.job, v1.EventTypeWarning, FailedCreateReason, "Error creating: %v", err)
+					return k8sErrors.NewAggregate([]error{fmt.Errorf("Creating pod %v returned error.", createdPod.ObjectMeta.Name), err})
+				}
+
+				s.recorder.Eventf(s.Job.job, v1.EventTypeNormal, SuccessfulCreateReason, "Created pod: %v", createdPod.Name)
+			}
 		}
 
 		if err != nil {
