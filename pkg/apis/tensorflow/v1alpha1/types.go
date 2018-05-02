@@ -140,6 +140,15 @@ type TFJobStatus struct {
 
 	// ReplicaStatuses specifies the status of each TF replica.
 	ReplicaStatuses []*TFReplicaStatus `json:"replicaStatuses"`
+
+	// The time when the job is put into schedule
+	EnqueueScheduleTime string `json:"enqueueScheduleTime"`
+
+	// The time when the job starts to run
+	StartRunTime string `json:"startRunTime"`
+
+	// The time when the job is finish.
+	JobFinishTime string `json:"jobFinishTime"`
 }
 
 // ReplicaState is a enum to store the status of replica

@@ -24,6 +24,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
@@ -153,6 +154,7 @@ type Controller struct {
 	/*** Jack Lin ***/
 	scheduleQueueJob QueueJobsList
 	runningQueueJob  QueueJobsList
+	finishQueueJob   QueueJobsList
 
 	cluster *Cluster
 
@@ -206,8 +208,8 @@ func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobcli
 		/*** Jack Lin ***/
 		scheduleQueueJob: make(QueueJobsList, 0),
 		runningQueueJob:  make(QueueJobsList, 0),
-
-		cluster: cluster,
+		finishQueueJob:   make(QueueJobsList, 0),
+		cluster:          cluster,
 		/*** Jack Lin ***/
 	}
 
@@ -368,13 +370,13 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		for workerCount > 0 {
 			flag = false
 			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
-				log.Info("node:", name, "has enough resource for one worker.")
+				//log.Info("node:", name, "has enough resource for one worker.")
 				placementPlan[name] += 1
 				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
 				nodeMemFreeMega -= jobWorker.WorkerMemReq
 				nodeGPUIdleNum -= jobWorker.WorkerGPUReq
 				workerCount -= 1
-				log.Info("workerCount: ", workerCount)
+				//log.Info("workerCount: ", workerCount)
 				flag = true
 			}
 			if flag == false {
@@ -387,12 +389,12 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 	if workerCount > 0 {
 		log.Info("there is NO enough resource for current job: ", jobWorker)
 		log.Info(workerCount, " workers cannot be placed.")
-		log.Info("placementPlan: ", placementPlan)
+		//log.Info("placementPlan: ", placementPlan)
 		PSPlace = ""
 		testRes = false
 	} else {
 		log.Info("there is YES enough resource for current job: ", jobWorker)
-		log.Info("placementPlan: ", placementPlan)
+		//log.Info("placementPlan: ", placementPlan)
 		// find where do workers locate
 		for name, count := range placementPlan {
 			if count > maxCount {
@@ -400,7 +402,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 				PSPlace = name
 			}
 		}
-		log.Info("PSPlace: ", PSPlace)
+		//log.Info("PSPlace: ", PSPlace)
 		testRes = true
 	}
 	log.Info("=========")
@@ -446,7 +448,7 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	var gpuRequestNum resource.Quantity
 
 	for _, container := range jobReplicasSetSpec.Template.Spec.Containers {
-		log.Info("in ScheduleTest Worker container info: %v", container)
+		//log.Info("in ScheduleTest Worker container info: %v", container)
 		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
 		memRequestMega += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
 		tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
@@ -554,24 +556,39 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		return false, err
 	}
 
-	tfJob, err = c.TFJobLister.TFJobs(ns).Get(name)
-	c.jobs[key].Update(tfJob)
-
-	c.jobs[key] = nc
-
 	// 2. put the job in the schedule queue.
 
 	jobTemp := QueueJobs{Key: key, Value: c.jobs[key]}
-	log.Info(jobTemp)
+	//log.Info(jobTemp)
 
 	var runningFlag bool = false
+	var scheduleFlag bool = false
+	var finishFlag bool = false
 	for _, j := range c.runningQueueJob {
-		if j.Key == key { // the job is in running
+		log.Info("%v is in running queue", j.Key)
+		if j.Key == jobTemp.Key { // the job is in running
 			runningFlag = true
 		}
 	}
-	if runningFlag == false {
+
+	for _, j := range c.scheduleQueueJob {
+		log.Info("%v is in schedule queue", j.Key)
+		if j.Key == jobTemp.Key { // the job is already in schedule queue
+			scheduleFlag = true
+		}
+	}
+
+	for _, j := range c.finishQueueJob {
+		log.Info("%v is in finish queue", j.Key)
+		if j.Key == jobTemp.Key { // the job is already in schedule queue
+			finishFlag = true
+		}
+	}
+
+	if runningFlag != true && scheduleFlag != true && finishFlag != true {
 		c.scheduleQueueJob = append(c.scheduleQueueJob, jobTemp)
+
+		jobTemp.Value.EnqueueScheduleSetTime()
 	}
 
 	//c.runningQueueJob = append(c.runningQueueJob, QueueJobs{key, nc})
@@ -608,11 +625,11 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 		//jobTest := jobToBeTested.GetJob()
 		//c.jobs[key].GetJob()
-		log.Info("j.Key: ", j.Key)
+		//log.Info("j.Key: ", j.Key)
 		log.Info("job name: ", c.jobs[j.Key].GetJob().ObjectMeta.Name)
 
-		jobReplicasSetList := c.jobs[j.Key].GetJobReplicasSetList()
-		log.Info("jobReplicasSetList: ", jobReplicasSetList)
+		//jobReplicasSetList := c.jobs[j.Key].GetJobReplicasSetList()
+		//log.Info("jobReplicasSetList: ", jobReplicasSetList)
 
 		// ScheduleTest test whether the job can run or not based on current cluster resource status
 		// placementPlan indicate the nodes on which pods of the job run.
@@ -635,14 +652,41 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	if testRes == true {
 		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
 		c.runningQueueJob = append(c.runningQueueJob, jobTemp)
+		jobTemp.Value.StartRunTimeSetTime()
 
 		if err := jobToRun.CreatePodsAndRunJob(&c.config, c.enableGangScheduling, placementPlan, PSPlace); err != nil {
 			return false, err
 		}
-
 	}
 
-	for _, j := range c.runningQueueJob {
+	for index, j := range c.runningQueueJob {
+
+		nstemp, nametemp, err := cache.SplitMetaNamespaceKey(j.Key)
+
+		//if tfjob has been deleted manually by user, remove it from running queue
+		tfJob, err = c.TFJobClient.KubeflowV1alpha1().TFJobs(nstemp).Get(nametemp, metav1.GetOptions{})
+		if err != nil {
+			if k8s_errors.IsNotFound(err) {
+				log.Infof("job: %v has already been deleted manually", nametemp)
+				c.runningQueueJob = RemoveIndex(c.runningQueueJob, index)
+				continue
+			}
+		}
+
+		//if tfjob has already succeeded, remove it from running queue
+		if tfJob.Status.Phase == tfv1alpha1.TFJobPhaseDone {
+			log.Infof("job: %v succeeded and is finish", nametemp)
+
+			c.runningQueueJob = RemoveIndex(c.runningQueueJob, index)
+
+			// if job succeed then record the finish time.
+			j.Value.JobFinishSetTime()
+
+			jobTemp := QueueJobs{Key: j.Key, Value: j.Value}
+			c.finishQueueJob = append(c.finishQueueJob, jobTemp)
+			continue
+		}
+
 		if err := j.Value.Reconcile(); err != nil {
 			return false, err
 		}

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"k8s.io/api/core/v1"
@@ -368,9 +369,36 @@ func (j *TrainingJob) updateCRDStatus() error {
 }
 
 /*** Jack Lin ***/
+
+func (j *TrainingJob) EnqueueScheduleSetTime() error {
+	j.status.EnqueueScheduleTime = time.Now().Format("2006.01.02-15:04:05")
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("failed to update CRD status: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (j *TrainingJob) StartRunTimeSetTime() error {
+	j.status.StartRunTime = time.Now().Format("2006.01.02-15:04:05")
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("failed to update CRD status: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (j *TrainingJob) JobFinishSetTime() error {
+	j.status.JobFinishTime = time.Now().Format("2006.01.02-15:04:05")
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("failed to update CRD status: %v", err)
+		return err
+	}
+	return nil
+}
+
 /*
 * When a job arrive and before enqueued into scheduleQueueJob
-*
  */
 func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 	if j.job.ObjectMeta.DeletionTimestamp != nil {
