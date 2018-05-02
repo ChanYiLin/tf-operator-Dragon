@@ -219,7 +219,7 @@ func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string) (*v1.Pod, er
 	}
 
 	pod.Spec.SchedulerName = s.Job.SchedulerName()
-	pod.Spec.NodeSelector["nodeName"] = name
+	//pod.Spec.NodeSelector["nodeName"] = name
 
 	// Configure the TFCONFIG environment variable.
 	tfConfig := TFConfig{
