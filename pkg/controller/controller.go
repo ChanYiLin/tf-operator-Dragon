@@ -424,7 +424,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		log.Info("In buildPlacementPlan ===Min num===: all node")
 
 		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerMinReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerMinReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerMinReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerMinReplicas+nodeBatchSize < 256) {
-			placementPlan[name] = jobWorker.WorkerReplicas
+			placementPlan[name] = jobWorker.WorkerMinReplicas
 			PSPlace = name
 			testRes = true
 			log.Info("====Min num=====")
