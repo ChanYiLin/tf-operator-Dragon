@@ -79,12 +79,14 @@ type NodeInfos struct {
 }
 
 type jobWorkerRequest struct {
-	JobName         string
-	WorkerReplicas  int
-	WorkerCPUReq    int64
-	WorkerMemReq    int64
-	WorkerGPUReq    int
-	WorkerBatchSize int
+	JobName           string
+	WorkerReplicas    int
+	WorkerMinReplicas int
+	WorkerCPUReq      int64
+	WorkerMemReq      int64
+	WorkerGPUReq      int
+	WorkerBatchSize   int
+	WorkerModelName   string
 }
 
 type QueueJobs struct {
@@ -327,6 +329,8 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 	var PSPlace string
 
 	var workerCount int = jobWorker.WorkerReplicas
+	var workerMinCount int = jobWorker.WorkerMinReplicas
+
 	var flag bool = false
 
 	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
@@ -340,14 +344,14 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
 		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
-		log.Info("In buildPlacementPlan: all node")
+		log.Info("In buildPlacementPlan ===Replicas num===: all node")
 
 		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerReplicas+nodeBatchSize < 256) {
 			placementPlan[name] = jobWorker.WorkerReplicas
 			PSPlace = name
 			testRes = true
-			log.Info("=========")
-			log.Info("there is ONE NODE having enough resource for current job: ", jobWorker)
+			log.Info("====Replicas num=====")
+			log.Info("there is ONE NODE having enough resource for current job with replicas num: ", jobWorker)
 			log.Info("placementPlan: ", placementPlan)
 			log.Info("=========")
 			return testRes, placementPlan, PSPlace
@@ -365,18 +369,16 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
 		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
-		log.Info("In buildPlacementPlan: single node")
+		log.Info("In buildPlacementPlan ===Replicas num===: single node")
 
 		for workerCount > 0 {
 			flag = false
 			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
-				//log.Info("node:", name, "has enough resource for one worker.")
 				placementPlan[name] += 1
 				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
 				nodeMemFreeMega -= jobWorker.WorkerMemReq
 				nodeGPUIdleNum -= jobWorker.WorkerGPUReq
 				workerCount -= 1
-				//log.Info("workerCount: ", workerCount)
 				flag = true
 			}
 			if flag == false {
@@ -385,7 +387,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		}
 	}
 	var maxCount int = 0
-	log.Info("=========")
+	log.Info("=====Replicas num====")
 	if workerCount > 0 {
 		log.Info("there is NO enough resource for current job: ", jobWorker)
 		log.Info(workerCount, " workers cannot be placed.")
@@ -394,7 +396,6 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		testRes = false
 	} else {
 		log.Info("there is YES enough resource for current job: ", jobWorker)
-		//log.Info("placementPlan: ", placementPlan)
 		// find where do workers locate
 		for name, count := range placementPlan {
 			if count > maxCount {
@@ -402,12 +403,89 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 				PSPlace = name
 			}
 		}
-		//log.Info("PSPlace: ", PSPlace)
+		testRes = true
+		log.Info("In buildPlacementPlan testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
+		log.Info("=========")
+		return testRes, placementPlan, PSPlace
+	}
+	log.Info("=========")
+
+	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
+
+		placementPlan[name] = 0
+		if name == "apollo25" {
+			continue
+		}
+		nodeCPUIdleMilli = idle
+		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
+		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
+		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+
+		log.Info("In buildPlacementPlan ===Min num===: all node")
+
+		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerMinReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerMinReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerMinReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerMinReplicas+nodeBatchSize < 256) {
+			placementPlan[name] = jobWorker.WorkerReplicas
+			PSPlace = name
+			testRes = true
+			log.Info("====Min num=====")
+			log.Info("there is ONE NODE having enough resource for current job with ***min*** num: ", jobWorker)
+			log.Info("placementPlan: ", placementPlan)
+			log.Info("=========")
+			return testRes, placementPlan, PSPlace
+		}
+
+	}
+
+	for name, idle := range r.NodeInfos.NodesCPUIdleMilli {
+		placementPlan[name] = 0
+		if name == "apollo25" {
+			continue
+		}
+		nodeCPUIdleMilli = idle
+		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
+		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
+		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+
+		log.Info("In buildPlacementPlan ===Min num===: single node")
+
+		for workerMinCount > 0 {
+			flag = false
+			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
+				placementPlan[name] += 1
+				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
+				nodeMemFreeMega -= jobWorker.WorkerMemReq
+				nodeGPUIdleNum -= jobWorker.WorkerGPUReq
+				workerMinCount -= 1
+				flag = true
+			}
+			if flag == false {
+				break
+			}
+		}
+	}
+
+	log.Info("=====Min num====")
+	if workerMinCount > 0 {
+		log.Info("there is NO enough resource for current job Min num: ", jobWorker)
+		log.Info(workerMinCount, " workers cannot be placed.")
+		//log.Info("placementPlan: ", placementPlan)
+		PSPlace = ""
+		testRes = false
+	} else {
+		log.Info("there is YES enough resource for current job Min num: ", jobWorker)
+		// find where do workers locate
+		for name, count := range placementPlan {
+			if count > maxCount {
+				maxCount = count
+				PSPlace = name
+			}
+		}
 		testRes = true
 	}
 	log.Info("=========")
 	log.Info("In buildPlacementPlan testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
 	return testRes, placementPlan, PSPlace
+
 }
 
 // scheduling:
@@ -420,7 +498,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 //         else 換下一個job。
 // (先不實作)若這一輪沒有選出job，則執行scale-up來提高資源使用率。
 
-func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.TrainingJob) (bool, map[string]int, string) {
+func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.TrainingJob) (bool, map[string]int, string, int) {
 
 	var testRes bool
 	placementPlan := make(map[string]int)
@@ -458,18 +536,58 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	gpuRequest := int(gpuRequestNum.Value())
 	jobWorkerReplicas := int(*jobReplicasSetSpec.Replicas)
 
-	log.Info("pod need CPU ", cpuRequestMilli, ", Mem ", memRequestMega, ", GPU ", gpuRequest, ", Replicas ", jobWorkerReplicas)
-
 	jobTemp := jobToBeTested.GetJob()
 	jobTempName := jobTemp.ObjectMeta.Name
 	jobTempBatchSize := jobTemp.Spec.BatchSize
+	jobTempMinReplicas := jobTemp.Spec.MinInstance
+	jobTempModelName := jobTemp.Spec.ModelName
 
-	jobWorker := jobWorkerRequest{JobName: jobTempName, WorkerReplicas: jobWorkerReplicas, WorkerCPUReq: cpuRequestMilli, WorkerMemReq: memRequestMega, WorkerGPUReq: gpuRequest, WorkerBatchSize: jobTempBatchSize}
+	log.Info("pod need CPU ", cpuRequestMilli, ", Mem ", memRequestMega, ", GPU ", gpuRequest, ", Replicas ", jobWorkerReplicas, ", MinReplicas ", jobTempMinReplicas)
+
+	jobWorker := jobWorkerRequest{
+		JobName:           jobTempName,
+		WorkerReplicas:    jobWorkerReplicas,
+		WorkerMinReplicas: jobTempMinReplicas,
+		WorkerCPUReq:      cpuRequestMilli,
+		WorkerMemReq:      memRequestMega,
+		WorkerGPUReq:      gpuRequest,
+		WorkerBatchSize:   jobTempBatchSize,
+		WorkerModelName:   jobTempModelName,
+	}
 
 	testRes, placementPlan, PSPlace = buildPlacementPlan(r, jobWorker)
 	log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
 
-	return testRes, placementPlan, PSPlace
+	return testRes, placementPlan, PSPlace, jobTempMinReplicas
+}
+
+func (c *Controller) scaleDown(minmin) (map[string]int, bool) {
+	diff := make(map[string]int)
+	var additional int
+	var currentReplicas int
+	var minReplicas int
+	var enough bool = false
+
+	for _, j := range c.runningQueueJob {
+		jobTemp = j.Value.GetJob()
+
+		currentReplicas = jobTemp.Status.RunningReplicas
+		minReplicas = jobTemp.Spec.MinInstance
+
+		if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
+
+			for currentReplicas > minReplicas {
+				currentReplicas -= 1
+				additional += 1
+				diff[jobTemp.ObjectMeta.Name] -= 1
+				if additional >= minmin {
+					enough = true
+					return diff, true
+				}
+			}
+		}
+	}
+	return diff, false
 }
 
 // syncTFJob will sync the job with the given. This function is not meant to be invoked
@@ -593,33 +711,24 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	//c.runningQueueJob = append(c.runningQueueJob, QueueJobs{key, nc})
 
-	// 3. do the scheduling
-	//
-	// - job level: cluster中執行的job越多越好
-	//    (FIFO，因為滿足資源需求可以在下一個pod level來判斷，同時判斷其他的限制)
-	//      - pod level:
-	//         if 有一個node可以放進所有task且該node不會超過PCI限制，placementPlan {node1: 4} 全部放該node，return
-	// 		   if 有跨node可以滿足，且兩邊的node都不會超過PCI限制，placementPlan {node1: 3, node2: 1}
-	//         //if 無法滿足locality, PCI-E限制，退回job level選下一個
-	//         else 換下一個job。
-	// (先不實作)若這一輪沒有選出job，則執行scale-up來提高資源使用率。
-	//
-
-	//type QueueJobs struct {
-	//	Key   string
-	//	Value *trainer.TrainingJob
-	//}
-
 	//var jobToBeTested *trainer.TrainingJob
 	var jobToRun *trainer.TrainingJob
 	var jobKey string
 	var testRes bool
 	placementPlan := make(map[string]int)
 	var PSPlace string
+	var minReplicas int
+
+	var minmin int = 100
+	var minminjob string
+
+	var scheduleEmptyFlag bool = true
 
 	for index, j := range c.scheduleQueueJob {
 
-		testRes, placementPlan, PSPlace = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
+		scheduleEmptyFlag = false
+
+		testRes, placementPlan, PSPlace, minReplicas = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
 		if testRes == true {
 			jobToRun = c.jobs[j.Key]
 			jobKey = j.Key
@@ -627,6 +736,10 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			break
 		} else {
 			jobToRun = nil
+			if minReplicas < minmin {
+				minmin = minReplicas
+				minminjob = j.Key
+			}
 		}
 
 	}
@@ -639,6 +752,14 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 		if err := jobToRun.CreatePodsAndRunJob(&c.config, c.enableGangScheduling, placementPlan, PSPlace); err != nil {
 			return false, err
+		}
+	} else {
+		if scheduleEmptyFlag == false {
+			diff, enoughRes := c.scaleDown(minmin)
+			log.Info("============")
+			log.Info("there is a job in scheduler cannot be run, the minmijob, ", minminjob, " with minmin Replicas: ", minmin)
+			log.Info("after scale Down, diff: ", diff, " enoughRes: ", enoughRes)
+			log.Info("============")
 		}
 	}
 

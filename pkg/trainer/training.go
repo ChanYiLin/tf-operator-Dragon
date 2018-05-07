@@ -64,6 +64,10 @@ type TrainingJob struct {
 
 	// contextLogger is a logger to use for logging information about this replica.
 	contextLogger *log.Entry
+
+	placementPlan map[string]int
+
+	currentReplicas int
 }
 
 // ClusterSpec represents a cluster TensorFlow specification.
@@ -397,6 +401,23 @@ func (j *TrainingJob) JobFinishSetTime() error {
 	return nil
 }
 
+func (j *TrainingJob) SetCurrentRunningReplicas() error {
+	var count int
+
+	for _, tempCount := range j.placementPlan {
+		count += tempCount
+	}
+
+	j.currentReplicas = count
+	j.job.Status.RunningReplicas = count
+
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("failed to update CRD status: %v", err)
+		return err
+	}
+	return nil
+}
+
 /*
 * When a job arrive and before enqueued into scheduleQueueJob
  */
@@ -436,6 +457,9 @@ func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 // when the job is selected and put into running queue, then create the pods of the job for real running
 func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool, placementPlan map[string]int, PSPlace string) error {
 
+	j.placementPlan = placementPlan
+	j.SetCurrentRunningReplicas()
+
 	// sync PDB for gang scheduling
 	// TODO(mitake): replace PDB with a newer mechanism if it is replaced
 	if enableGangScheduling {
@@ -474,6 +498,8 @@ func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, e
 
 // Reconcile tries to get the job into the desired state.
 func (j *TrainingJob) Reconcile() error {
+
+	j.SetCurrentRunningReplicas()
 
 	// Call GetStatus in each reconcile loop
 	state, replicaStatuses, err := j.GetStatus()
