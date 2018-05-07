@@ -61,9 +61,10 @@ type TFJobSpec struct {
 	// SchedulerName specifies the name of scheduler which should handle the TFJob
 	SchedulerName string `json:"schedulerName,omitempty"`
 
-	MinInstance int `json:"min-instance"`
-	MaxInstance int `json:"max-instance"`
-	BatchSize   int `json:"batch-size"`
+	MinInstance int    `json:"min-instance"`
+	MaxInstance int    `json:"max-instance"`
+	BatchSize   int    `json:"batch-size"`
+	ModelName   string `json:"modelName"`
 }
 
 // TerminationPolicySpec structure for storing specifications for process termination
@@ -149,6 +150,8 @@ type TFJobStatus struct {
 
 	// The time when the job is finish.
 	JobFinishTime string `json:"jobFinishTime"`
+
+	RunningReplicas int `json:"runningReplicas"`
 }
 
 // ReplicaState is a enum to store the status of replica
