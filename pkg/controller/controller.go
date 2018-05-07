@@ -619,23 +619,6 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	for index, j := range c.scheduleQueueJob {
 
-		//jobToBeTested = *trainer.TrainingJob
-		//jobToBeTested = j.Value
-		//log.Info("We are now test job: ", jobToBeTested)
-
-		//jobTest := jobToBeTested.GetJob()
-		//c.jobs[key].GetJob()
-		//log.Info("j.Key: ", j.Key)
-		log.Info("job name: ", c.jobs[j.Key].GetJob().ObjectMeta.Name)
-
-		//jobReplicasSetList := c.jobs[j.Key].GetJobReplicasSetList()
-		//log.Info("jobReplicasSetList: ", jobReplicasSetList)
-
-		// ScheduleTest test whether the job can run or not based on current cluster resource status
-		// placementPlan indicate the nodes on which pods of the job run.
-		// placementPlan: {node1: 3, node2: 1}
-		//   which means 3 pods of the job shoule be placed on node1
-		//   and 1 pod of the job shoule be placed on node2
 		testRes, placementPlan, PSPlace = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
 		if testRes == true {
 			jobToRun = c.jobs[j.Key]
@@ -691,15 +674,6 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			return false, err
 		}
 	}
-
-	/*** Jack Lin  ***/
-	/*** auto-scale ***/
-
-	//diff := c.autoScale(r)
-
-	//log.Info("Scale Plan %v", diff)
-	//log.Info("Congrats!!!")
-	/*** Jack Lin  ***/
 
 	tfJob, err = c.TFJobClient.KubeflowV1alpha1().TFJobs(tfJob.ObjectMeta.Namespace).Get(tfJob.ObjectMeta.Name, metav1.GetOptions{})
 
