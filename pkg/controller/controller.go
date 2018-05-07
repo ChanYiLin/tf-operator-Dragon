@@ -518,7 +518,7 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	}
 
 	if workerFlag == false {
-		return false, placementPlan, ""
+		return false, placementPlan, "", 0
 	}
 
 	var cpuRequestMilli int64
@@ -561,15 +561,14 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	return testRes, placementPlan, PSPlace, jobTempMinReplicas
 }
 
-func (c *Controller) scaleDown(minmin) (map[string]int, bool) {
+func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
 	diff := make(map[string]int)
 	var additional int
 	var currentReplicas int
 	var minReplicas int
-	var enough bool = false
 
 	for _, j := range c.runningQueueJob {
-		jobTemp = j.Value.GetJob()
+		jobTemp := j.Value.GetJob()
 
 		currentReplicas = jobTemp.Status.RunningReplicas
 		minReplicas = jobTemp.Spec.MinInstance
@@ -581,7 +580,6 @@ func (c *Controller) scaleDown(minmin) (map[string]int, bool) {
 				additional += 1
 				diff[jobTemp.ObjectMeta.Name] -= 1
 				if additional >= minmin {
-					enough = true
 					return diff, true
 				}
 			}
