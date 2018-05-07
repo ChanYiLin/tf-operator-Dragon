@@ -574,7 +574,7 @@ func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
 		minReplicas = jobTemp.Spec.MinInstance
 
 		if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
-
+			log.Info("in scaledown, current job for scale down is: ", jobTemp.ObjectMeta.Name)
 			for currentReplicas > minReplicas {
 				currentReplicas -= 1
 				additional += 1

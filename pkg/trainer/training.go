@@ -409,7 +409,7 @@ func (j *TrainingJob) SetCurrentRunningReplicas() error {
 	}
 
 	j.currentReplicas = count
-	j.job.Status.RunningReplicas = count
+	j.status.RunningReplicas = count
 
 	if err := j.updateCRDStatus(); err != nil {
 		j.contextLogger.Warningf("failed to update CRD status: %v", err)
