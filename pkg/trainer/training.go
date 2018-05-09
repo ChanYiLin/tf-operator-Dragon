@@ -17,7 +17,9 @@ package trainer
 
 import (
 	"fmt"
+	"io/ioutil"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/kubernetes/pkg/api"
 
 	"github.com/kubeflow/tf-operator/pkg/apis/tensorflow/helper"
 	tfv1alpha1 "github.com/kubeflow/tf-operator/pkg/apis/tensorflow/v1alpha1"
@@ -68,6 +71,8 @@ type TrainingJob struct {
 	placementPlan map[string]int
 
 	currentReplicas int
+
+	Worker0Name string
 }
 
 // ClusterSpec represents a cluster TensorFlow specification.
@@ -496,8 +501,182 @@ func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, e
 
 }
 
+func (j *TrainingJob) getLogOfPod() (string, error) {
+
+	j.contextLogger.Infof("get Worker0: %v of job: %v", j.Worker0Name, j.job.ObjectMeta.Name)
+
+	client := j.KubeCli.CoreV1().RESTClient()
+
+	pod, err := j.KubeCli.CoreV1().Pods(j.job.ObjectMeta.Namespace).Get(j.Worker0Name, meta_v1.GetOptions{})
+	//j.contextLogger.Infof("get Worker0 pods: %v ", pod)
+
+	if err != nil {
+		return "", err
+	}
+	container := pod.Spec.Containers[0].Name
+	//j.contextLogger.Infof("get Worker0 pods container: %v ", container)
+
+	logOptions := &api.PodLogOptions{
+		Container:  container,
+		Follow:     false,
+		Previous:   false,
+		Timestamps: true,
+	}
+
+	req := client.Get().
+		Namespace(j.job.ObjectMeta.Namespace).
+		Name(j.Worker0Name).
+		Resource("pods").
+		SubResource("log").
+		Param("follow", strconv.FormatBool(logOptions.Follow)).
+		Param("container", logOptions.Container).
+		Param("previous", strconv.FormatBool(logOptions.Previous)).
+		Param("timestamps", strconv.FormatBool(logOptions.Timestamps))
+
+	readCloser, err := req.Stream()
+	if err != nil {
+		j.contextLogger.Infof("error when readCloser, err := req.Stream() error: %v", err)
+		return "", err
+	}
+
+	defer readCloser.Close()
+
+	result, err := ioutil.ReadAll(readCloser)
+	if err != nil {
+		j.contextLogger.Infof("error when result, err := ioutil.ReadAll(readCloser) error: %v", err)
+		return "", err
+	}
+
+	j.contextLogger.Infof("get Worker0's log", string(result))
+
+	return string(result), nil
+}
+
+// do the real scale:
+// get the current training steps
+// delete current all pod and service and other resources
+// recreate all pod based on new j.placementPlan
+
+func (j *TrainingJob) DoScale() error {
+	//var taskLabels string
+	//var taskLabels := s.LabelsByIndex(0).ToSelector()
+
+	/*for _, r := range j.Replicas {
+		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			taskLabels = r.LabelsByIndex(0).ToSelector()
+			break
+		}
+	}*/
+
+	var trainSteps int = 0
+
+	logs, err := j.getLogOfPod()
+	if err != nil {
+		j.contextLogger.Infof("error in DoScale after getLogOfPod: %v", err)
+		return err
+	}
+
+	sliceTemp := strings.Split(logs, "\n")
+	last := len(sliceTemp)
+	if last < 2 {
+		trainSteps = 0 // <=
+	} else {
+		if strings.Contains(sliceTemp[last-2], "images/sec") {
+			// last line: "2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60\timages/sec: 102.4 +/- 0.7 (jitter = 5.3)\t12.258"
+			lastLine := sliceTemp[last-2]
+
+			// sliceLastLineTemp: ["2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60" "images/sec: 102.4 +/- 0.7 (jitter = 5.3)" "12.258"]
+			sliceLastLineTemp := strings.Split(lastLine, "\t")
+
+			// getTrainSteps: ["2018-05-09T15:19:36.629802035Z" "INFO|2018-05-09T15:19:36|/opt/launcher.py|27|" "60"]
+			getTrainSteps := strings.Split(sliceLastLineTemp[0], " ")
+
+			//lastStep: 60
+			lastStep, err := strconv.Atoi(getTrainSteps[2])
+			if err != nil {
+				fmt.Printf("error: %v", err)
+			}
+			fmt.Printf("lastStep: %d\n", lastStep)
+
+			trainSteps = lastStep // <=
+
+		} else {
+			fmt.Println("not in training process!")
+
+			trainSteps = 0 // <=
+		}
+	}
+
+	j.contextLogger.Infof("!!!!Get Worker0's log Success!!!!")
+
+	//Do Scale
+
+	return nil
+}
+
+//scale down: -2
+
+//
+//job: 5 worker
+//{
+//	"node1" : 2 workers,
+//	"node2" : 3 workers,
+//}
+
+func (j *TrainingJob) ScaleDown(scaledownNum int) string {
+
+	node1Num := j.placementPlan["apollo61"]
+	node2Num := j.placementPlan["apollo62"]
+
+	var big string
+	var small string
+
+	if node1Num > node2Num {
+		if node2Num == 0 {
+			big = "apollo62"
+			small = "apollo61"
+			PSPlace := small
+		} else {
+			big = "apollo61"
+			small = "apollo62"
+			PSPlace := big
+		}
+	} else {
+		if node1Num == 0 {
+			big = "apollo61"
+			small = "apollo62"
+			PSPlace := small
+		} else {
+			big = "apollo62"
+			small = "apollo61"
+			PSPlace := big
+		}
+
+	}
+
+	for scaledownNum < 0 || j.placementPlan[small] == 0 {
+		j.placementPlan[small] -= 1
+		scaledownNum += 1
+	}
+
+	if scaledownNum > 0 {
+		for scaledownNum < 0 || j.placementPlan[big] == 0 {
+			j.placementPlan[big] -= 1
+			scaledownNum += 1
+		}
+	}
+
+	return PSPlace
+}
+
 // Reconcile tries to get the job into the desired state.
-func (j *TrainingJob) Reconcile() error {
+func (j *TrainingJob) Reconcile(scaledownNum int, scaledownFlag bool) error {
+	if scaledownFlag == true {
+		j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
+		PSPlace := j.ScaleDown(scaledownNum)
+		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, PSPlace)
+		j.DoScale()
+	}
 
 	j.SetCurrentRunningReplicas()
 

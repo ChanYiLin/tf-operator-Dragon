@@ -204,12 +204,16 @@ func (s *TFReplicaSet) CreateServiceWithIndex(index int32) (*v1.Service, error) 
 }
 
 // CreatePodWithIndex will create a new pod with specify index
-func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string) (*v1.Pod, error) {
+func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string, replicaType tfv1alpha1.TFReplicaType) (*v1.Pod, error) {
 	taskLabels := s.LabelsByIndex(index)
+	podName := s.genPodName(index)
 
+	if index == 0 && replicaType == tfv1alpha1.WORKER {
+		s.Job.Worker0Name = podName
+	}
 	pod := &v1.Pod{
 		ObjectMeta: meta_v1.ObjectMeta{
-			Name:   s.genPodName(index),
+			Name:   podName,
 			Labels: taskLabels,
 			OwnerReferences: []meta_v1.OwnerReference{
 				helper.AsOwner(s.Job.job),
@@ -492,7 +496,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 				// if found the node then break to next pod
 				for name, count := range localPlacementPlan {
 					if count > 0 {
-						createdPod, err := s.CreatePodWithIndex(index, name)
+						createdPod, err := s.CreatePodWithIndex(index, name, replicaType)
 
 						// If the pod already exists do nothing.
 						if err != nil {
@@ -513,7 +517,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 
 			// Create PS pod
 			if replicaType == tfv1alpha1.PS {
-				createdPod, err := s.CreatePodWithIndex(index, PSPlace)
+				createdPod, err := s.CreatePodWithIndex(index, PSPlace, replicaType)
 
 				// If the pod already exists do nothing.
 				if err != nil {

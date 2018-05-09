@@ -326,6 +326,10 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 
 	var testRes bool
 	placementPlan := make(map[string]int)
+	placementPlan["apollo25"] = 0
+	placementPlan["apollo61"] = 0
+	placementPlan["apollo62"] = 0
+
 	var PSPlace string
 
 	var workerCount int = jobWorker.WorkerReplicas
@@ -742,6 +746,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	}
 
+	diff := make(map[string]int)
+	var enoughRes bool = false
+
 	log.Info("testRes", testRes, placementPlan, PSPlace)
 	if testRes == true {
 		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
@@ -753,7 +760,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		}
 	} else {
 		if scheduleEmptyFlag == false {
-			diff, enoughRes := c.scaleDown(minmin)
+			diff, enoughRes = c.scaleDown(minmin)
 			log.Info("============")
 			log.Info("there is a job in scheduler cannot be run, the minmijob, ", minminjob, " with minmin Replicas: ", minmin)
 			log.Info("after scale Down, diff: ", diff, " enoughRes: ", enoughRes)
@@ -789,9 +796,23 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			continue
 		}
 
-		if err := j.Value.Reconcile(); err != nil {
-			return false, err
+		// diff map[string]int: diff[jobTemp.ObjectMeta.Name] -= 1
+
+		jobTemp := j.Value.GetJob()
+
+		scaledownNum, ok := diff[jobTemp.ObjectMeta.Name]
+
+		if ok && enoughRes == true {
+			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is going to scale down, scaledownNum: %v", scaledownNum)
+			if err := j.Value.Reconcile(scaledownNum, true); err != nil {
+				return false, err
+			}
+		} else {
+			if err := j.Value.Reconcile(0, false); err != nil {
+				return false, err
+			}
 		}
+
 	}
 
 	/*** Jack Lin  ***/
