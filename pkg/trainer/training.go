@@ -618,26 +618,27 @@ func (j *TrainingJob) ScaleDown(scaledownNum int) string {
 
 	var big string
 	var small string
+	var PSPlace string
 
 	if node1Num > node2Num {
 		if node2Num == 0 {
 			big = "apollo62"
 			small = "apollo61"
-			PSPlace := small
+			PSPlace = small
 		} else {
 			big = "apollo61"
 			small = "apollo62"
-			PSPlace := big
+			PSPlace = big
 		}
 	} else {
 		if node1Num == 0 {
 			big = "apollo61"
 			small = "apollo62"
-			PSPlace := small
+			PSPlace = small
 		} else {
 			big = "apollo62"
 			small = "apollo61"
-			PSPlace := big
+			PSPlace = big
 		}
 
 	}
@@ -670,7 +671,7 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 	for _, r := range j.Replicas {
 		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
 			// --num_batches=200
-			argsTempString := *r.Spec.Template.Spec.Containers[0].Args[7]
+			argsTempString := r.Spec.Template.Spec.Containers[0].Args[7]
 			sliceTemp := strings.Split(argsTempString, "=")
 			trainsteps, _ := strconv.Atoi(sliceTemp[1])
 			originalTrainingSteps = trainsteps
@@ -680,11 +681,11 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 
 	// calculate left training steps and update the jobs
 	leftTrainingSteps = originalTrainingSteps - trainingSteps
-	j.contextLogger.Infof("job: %v original trainsteps: %v, currentTrainSteps: %v, leftTrainingSteps: %v", j.job.ObjectMeta.Name, originalTrainingSteps, traingSteps, leftTrainingSteps)
+	j.contextLogger.Infof("job: %v original trainsteps: %v, currentTrainSteps: %v, leftTrainingSteps: %v", j.job.ObjectMeta.Name, originalTrainingSteps, trainingSteps, leftTrainingSteps)
 
 	newJob := j.job
-	newJob.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
-	newJob.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
+	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
+	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
 	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
 	if err != nil {
 		return err
@@ -725,8 +726,13 @@ func (j *TrainingJob) Reconcile(scaledownNum int, scaledownFlag bool) error {
 		PSPlace := j.ScaleDown(scaledownNum)
 		j.PSPlace = PSPlace
 		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
-		trainingSteps := j.GetTrainingSteps()
-		err := j.DoScale(trainingSteps, PSPlace)
+		trainingSteps, err := j.GetTrainingSteps()
+		if err != nil {
+			j.contextLogger.Infof("job: %v has error when GetTrainingSteps error: %v ", j.job.ObjectMeta.Name, err)
+			return err
+		}
+
+		err = j.DoScale(trainingSteps)
 		if err != nil {
 			j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
 			return err

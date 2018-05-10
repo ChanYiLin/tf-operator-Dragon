@@ -487,7 +487,15 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 			return err
 		}
 
-		if len(pl.Items) == 0 {
+		var deleteFlag bool = false
+		if len(pl.Items) != 0 {
+			if pl.Items[0].ObjectMeta.DeletionTimestamp != nil {
+				deleteFlag = true
+				s.contextLogger.Infof("Job %s pod for replica %s index %s is going to delete with timestamp %v", s.Job.name(), string(s.Spec.TFReplicaType), index, pl.Items[0].ObjectMeta.DeletionTimestamp)
+			}
+		}
+
+		if len(pl.Items) == 0 || deleteFlag == true {
 			s.contextLogger.Infof("Job %s missing pod for replica %s index %s, creating a new one.", s.Job.name(), string(s.Spec.TFReplicaType), index)
 
 			// Create Worker pod
