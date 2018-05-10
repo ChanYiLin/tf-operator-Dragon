@@ -808,6 +808,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 				return false, err
 			}
 		} else {
+			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is NOT going to scale down!!!")
 			if err := j.Value.Reconcile(0, false); err != nil {
 				return false, err
 			}

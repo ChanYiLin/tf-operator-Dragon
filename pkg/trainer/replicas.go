@@ -463,6 +463,8 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 		localPlacementPlan[k] = v
 	}
 
+	s.contextLogger.Infof("Job %s localPlacementPlan: %v", s.Job.name(), localPlacementPlan)
+
 	for index := int32(0); index < *s.Spec.Replicas; index++ {
 
 		// Label to get all pods of this TFReplicaType + index

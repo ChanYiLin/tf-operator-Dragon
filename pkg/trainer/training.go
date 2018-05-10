@@ -415,6 +415,14 @@ func (j *TrainingJob) SetCurrentRunningReplicas() error {
 		count += tempCount
 	}
 
+	newJob := j.job
+	*newJob.Spec.ReplicaSpecs[0].Replicas = int32(count)
+	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
+	if err != nil {
+		return err
+	}
+	j.job = newJob
+
 	j.currentReplicas = count
 	j.status.RunningReplicas = count
 
