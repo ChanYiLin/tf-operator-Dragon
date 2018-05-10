@@ -70,6 +70,8 @@ type TrainingJob struct {
 
 	placementPlan map[string]int
 
+	PSPlace string
+
 	currentReplicas int
 
 	Worker0Name string
@@ -119,9 +121,9 @@ func NewJob(kubeCli kubernetes.Interface, tfJobClient tfjobclient.Interface, rec
 
 /*** Jack Lin***/
 func (j *TrainingJob) GetJobReplicasSetList() []*TFReplicaSet {
-	log.Info("in GetJobReplicasSetList")
-	log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
-	log.Info("j.Replicas: %v", j.Replicas)
+	//log.Info("in GetJobReplicasSetList")
+	//log.Info("TrainingJob name: %v", j.job.ObjectMeta.Name)
+	//log.Info("j.Replicas: %v", j.Replicas)
 
 	return j.Replicas
 }
@@ -463,6 +465,7 @@ func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool, placementPlan map[string]int, PSPlace string) error {
 
 	j.placementPlan = placementPlan
+	j.PSPlace = PSPlace
 	j.SetCurrentRunningReplicas()
 
 	// sync PDB for gang scheduling
@@ -547,7 +550,7 @@ func (j *TrainingJob) getLogOfPod() (string, error) {
 		return "", err
 	}
 
-	j.contextLogger.Infof("get Worker0's log", string(result))
+	//j.contextLogger.Infof("get Worker0's log", string(result))
 
 	return string(result), nil
 }
@@ -557,23 +560,14 @@ func (j *TrainingJob) getLogOfPod() (string, error) {
 // delete current all pod and service and other resources
 // recreate all pod based on new j.placementPlan
 
-func (j *TrainingJob) DoScale() error {
-	//var taskLabels string
-	//var taskLabels := s.LabelsByIndex(0).ToSelector()
-
-	/*for _, r := range j.Replicas {
-		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
-			taskLabels = r.LabelsByIndex(0).ToSelector()
-			break
-		}
-	}*/
+func (j *TrainingJob) GetTrainingSteps() (int, error) {
 
 	var trainSteps int = 0
 
 	logs, err := j.getLogOfPod()
 	if err != nil {
-		j.contextLogger.Infof("error in DoScale after getLogOfPod: %v", err)
-		return err
+		j.contextLogger.Infof("error in GetTrainingSteps after getLogOfPod: %v", err)
+		return 0, err
 	}
 
 	sliceTemp := strings.Split(logs, "\n")
@@ -592,26 +586,20 @@ func (j *TrainingJob) DoScale() error {
 			getTrainSteps := strings.Split(sliceLastLineTemp[0], " ")
 
 			//lastStep: 60
-			lastStep, err := strconv.Atoi(getTrainSteps[2])
-			if err != nil {
-				fmt.Printf("error: %v", err)
-			}
-			fmt.Printf("lastStep: %d\n", lastStep)
+			lastStep, _ := strconv.Atoi(getTrainSteps[2])
 
 			trainSteps = lastStep // <=
 
 		} else {
-			fmt.Println("not in training process!")
-
 			trainSteps = 0 // <=
 		}
 	}
 
-	j.contextLogger.Infof("!!!!Get Worker0's log Success!!!!")
+	j.contextLogger.Infof("Get Workers training steps successfully training steps: %v", trainSteps)
 
 	//Do Scale
 
-	return nil
+	return trainSteps, nil
 }
 
 //scale down: -2
@@ -669,13 +657,81 @@ func (j *TrainingJob) ScaleDown(scaledownNum int) string {
 	return PSPlace
 }
 
+func (j *TrainingJob) DoScale(trainingSteps int) error {
+
+	// delete current worker pods/service and PS pods/service
+	if cErr := j.deleteResources(); cErr != nil {
+		j.contextLogger.Errorf("trainingJob.deleteResources() error; %v", cErr)
+	}
+
+	var originalTrainingSteps int = 0
+	var leftTrainingSteps int = 0
+
+	for _, r := range j.Replicas {
+		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			// --num_batches=200
+			argsTempString := *r.Spec.Template.Spec.Containers[0].Args[7]
+			sliceTemp := strings.Split(argsTempString, "=")
+			trainsteps, _ := strconv.Atoi(sliceTemp[1])
+			originalTrainingSteps = trainsteps
+			break
+		}
+	}
+
+	// calculate left training steps and update the jobs
+	leftTrainingSteps = originalTrainingSteps - trainingSteps
+	j.contextLogger.Infof("job: %v original trainsteps: %v, currentTrainSteps: %v, leftTrainingSteps: %v", j.job.ObjectMeta.Name, originalTrainingSteps, traingSteps, leftTrainingSteps)
+
+	newJob := j.job
+	newJob.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
+	newJob.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
+	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
+	if err != nil {
+		return err
+	}
+	j.job = newJob
+
+	// Recreate all the training pods
+	if j.status.Phase == tfv1alpha1.TFJobPhaseCreating || j.status.Phase == tfv1alpha1.TFJobPhaseRunning {
+		// sync pods
+		for _, rc := range j.Replicas {
+			err := rc.SyncPods(j.placementPlan, j.PSPlace, rc.Spec.TFReplicaType)
+			if err != nil {
+				j.contextLogger.Errorf("SyncPods error: %v", err)
+			}
+		}
+
+		// sync services
+		for _, rc := range j.Replicas {
+			err := rc.SyncServices()
+			if err != nil {
+				j.contextLogger.Errorf("SyncServices error: %v", err)
+			}
+		}
+	}
+
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("Job %v; failed to update status error: %v", j.job.ObjectMeta.Name, err)
+		return err
+	}
+	return nil
+
+}
+
 // Reconcile tries to get the job into the desired state.
 func (j *TrainingJob) Reconcile(scaledownNum int, scaledownFlag bool) error {
 	if scaledownFlag == true {
 		j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
 		PSPlace := j.ScaleDown(scaledownNum)
-		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, PSPlace)
-		j.DoScale()
+		j.PSPlace = PSPlace
+		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+		trainingSteps := j.GetTrainingSteps()
+		err := j.DoScale(trainingSteps, PSPlace)
+		if err != nil {
+			j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
+			return err
+		}
+		j.contextLogger.Infof("!!!job: %v ScaleDown Successfully!!!", j.job.ObjectMeta.Name)
 	}
 
 	j.SetCurrentRunningReplicas()
