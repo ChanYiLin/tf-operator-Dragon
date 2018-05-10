@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"k8s.io/api/core/v1"
@@ -464,6 +465,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 	}
 
 	s.contextLogger.Infof("Job %s localPlacementPlan: %v", s.Job.name(), localPlacementPlan)
+	var deleteFlag bool = false
 
 	for index := int32(0); index < *s.Spec.Replicas; index++ {
 
@@ -489,7 +491,6 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 			return err
 		}
 
-		var deleteFlag bool = false
 		if len(pl.Items) != 0 {
 			if pl.Items[0].ObjectMeta.DeletionTimestamp != nil {
 				deleteFlag = true
@@ -547,8 +548,17 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 			// TODO: handing this error
 			continue
 		}
-	}
 
+	}
+	if deleteFlag == true {
+		for {
+			_, pendingTmp, _ := s.GetPodStatus()
+			if pendingTmp == 0 {
+				break
+			}
+			time.Sleep(time.Duration(10) * time.Second)
+		}
+	}
 	return nil
 }
 
