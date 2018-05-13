@@ -319,19 +319,19 @@ func getJobWorkerRequest(j *trainer.TrainingJob) jobWorkerRequest {
 	jobReplicasSetList := j.GetJobReplicasSetList()
 
 	var jobReplicasSetSpec tfv1alpha1.TFReplicaSpec
-	var workerFlag bool = false
+	//var workerFlag bool = false
 
 	for _, t := range jobReplicasSetList {
 		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
-			workerFlag = true
+			//workerFlag = true
 			jobReplicasSetSpec = t.Spec
 			break
 		}
 	}
 
-	if workerFlag == false {
+	/*if workerFlag == false {
 		return false, placementPlan, "", 0
-	}
+	}*/
 
 	var cpuRequestMilli int64
 	var memRequestMega int64
@@ -569,7 +569,10 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	testRes, placementPlan, PSPlace = buildPlacementPlan(r, jobWorker)
 	log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
 
-	return testRes, placementPlan, PSPlace, jobTempMinReplicas
+	//jobTemp := j.GetJob()
+	//jobTempMinReplicas := jobTemp.Spec.MinInstance
+
+	return testRes, placementPlan, PSPlace, jobWorker.WorkerMinReplicas
 }
 
 func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
@@ -839,9 +842,11 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	if testRes == false && enoughRes == false { //如果沒有job且enoughRes是false，則 counter += 1
 		c.scaleUpCounter += 1
-		if c.scaleUpCounter > 10 {
-			scaleUpPlan, scaleUpFlag = scaleUp(r)
+		log.Info("====****==== c.scaleUpCounter :%v ====****==== ", c.scaleUpCounter)
+		if c.scaleUpCounter > 5 {
+			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
 			log.Info("c.scaleUpCounter > 10 and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+			c.scaleUpCounter = 0
 		}
 	}
 

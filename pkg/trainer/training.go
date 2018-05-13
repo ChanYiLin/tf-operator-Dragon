@@ -430,6 +430,22 @@ func (j *TrainingJob) SetCurrentRunningReplicas() error {
 		j.contextLogger.Warningf("failed to update CRD status: %v", err)
 		return err
 	}
+
+	//refresh j.Replicas
+	j.Replicas = make([]*TFReplicaSet, 0, len(j.job.Spec.ReplicaSpecs))
+	for _, t := range j.job.Spec.ReplicaSpecs {
+		r, err := NewTFReplicaSet(j.KubeCli, j.recorder, *t, j)
+		if err != nil {
+			return err
+		}
+		j.Replicas = append(j.Replicas, r)
+	}
+
+	if err := j.updateCRDStatus(); err != nil {
+		j.contextLogger.Warningf("failed to update CRD status: %v", err)
+		return err
+	}
+
 	return nil
 }
 
@@ -739,6 +755,9 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 		PSPlace := j.ScaleDown(scaleNum)
 		j.PSPlace = PSPlace
 		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+
+		j.SetCurrentRunningReplicas()
+
 		trainingSteps, err := j.GetTrainingSteps()
 		if err != nil {
 			j.contextLogger.Infof("job: %v has error when GetTrainingSteps error: %v ", j.job.ObjectMeta.Name, err)
@@ -757,6 +776,9 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 		j.contextLogger.Infof("job: %v  is going to scale UP", j.job.ObjectMeta.Name)
 		j.ScaleUp(scaleNum)
 		j.contextLogger.Infof("job: %v  after scale UP, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+
+		j.SetCurrentRunningReplicas()
+
 		trainingSteps, err := j.GetTrainingSteps()
 		if err != nil {
 			j.contextLogger.Infof("job: %v has error when GetTrainingSteps error: %v ", j.job.ObjectMeta.Name, err)
@@ -771,7 +793,9 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 
 	}
 
-	j.SetCurrentRunningReplicas()
+	if scaleUpFlag == false && scaledownFlag == false {
+		j.SetCurrentRunningReplicas()
+	}
 
 	// Call GetStatus in each reconcile loop
 	state, replicaStatuses, err := j.GetStatus()
