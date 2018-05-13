@@ -160,6 +160,8 @@ type Controller struct {
 
 	cluster *Cluster
 
+	scaleUpCounter int
+
 	/*** Jack Lin ***/
 
 }
@@ -212,6 +214,7 @@ func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobcli
 		runningQueueJob:  make(QueueJobsList, 0),
 		finishQueueJob:   make(QueueJobsList, 0),
 		cluster:          cluster,
+		scaleUpCounter:   0,
 		/*** Jack Lin ***/
 	}
 
@@ -310,6 +313,58 @@ func (c *Controller) processNextWorkItem() bool {
 	c.WorkQueue.AddRateLimited(key)
 
 	return true
+}
+
+func getJobWorkerRequest(j *trainer.TrainingJob) jobWorkerRequest {
+	jobReplicasSetList := j.GetJobReplicasSetList()
+
+	var jobReplicasSetSpec tfv1alpha1.TFReplicaSpec
+	var workerFlag bool = false
+
+	for _, t := range jobReplicasSetList {
+		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
+			workerFlag = true
+			jobReplicasSetSpec = t.Spec
+			break
+		}
+	}
+
+	if workerFlag == false {
+		return false, placementPlan, "", 0
+	}
+
+	var cpuRequestMilli int64
+	var memRequestMega int64
+	var gpuRequestNum resource.Quantity
+
+	for _, container := range jobReplicasSetSpec.Template.Spec.Containers {
+		//log.Info("in ScheduleTest Worker container info: %v", container)
+		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
+		memRequestMega += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
+		tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
+		gpuRequestNum.Add(tmpGpu)
+	}
+
+	gpuRequest := int(gpuRequestNum.Value())
+	jobWorkerReplicas := int(*jobReplicasSetSpec.Replicas)
+
+	jobTemp := j.GetJob()
+	jobTempName := jobTemp.ObjectMeta.Name
+	jobTempBatchSize := jobTemp.Spec.BatchSize
+	jobTempMinReplicas := jobTemp.Spec.MinInstance
+	jobTempModelName := jobTemp.Spec.ModelName
+
+	jobWorker := jobWorkerRequest{
+		JobName:           jobTempName,
+		WorkerReplicas:    jobWorkerReplicas,
+		WorkerMinReplicas: jobTempMinReplicas,
+		WorkerCPUReq:      cpuRequestMilli,
+		WorkerMemReq:      memRequestMega,
+		WorkerGPUReq:      gpuRequest,
+		WorkerBatchSize:   jobTempBatchSize,
+		WorkerModelName:   jobTempModelName,
+	}
+	return jobWorker
 }
 
 // 尋找部署的node
@@ -508,56 +563,8 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	placementPlan := make(map[string]int)
 	var PSPlace string
 
-	jobReplicasSetList := jobToBeTested.GetJobReplicasSetList()
-
-	var jobReplicasSetSpec tfv1alpha1.TFReplicaSpec
-	var workerFlag bool = false
-
-	for _, t := range jobReplicasSetList {
-		if t.Spec.TFReplicaType == tfv1alpha1.WORKER {
-			workerFlag = true
-			jobReplicasSetSpec = t.Spec
-			break
-		}
-	}
-
-	if workerFlag == false {
-		return false, placementPlan, "", 0
-	}
-
-	var cpuRequestMilli int64
-	var memRequestMega int64
-	var gpuRequestNum resource.Quantity
-
-	for _, container := range jobReplicasSetSpec.Template.Spec.Containers {
-		//log.Info("in ScheduleTest Worker container info: %v", container)
-		cpuRequestMilli += container.Resources.Requests.Cpu().ScaledValue(resource.Milli)
-		memRequestMega += container.Resources.Requests.Memory().ScaledValue(resource.Mega)
-		tmpGpu := container.Resources.Requests[ResourceNvidiaGPU]
-		gpuRequestNum.Add(tmpGpu)
-	}
-
-	gpuRequest := int(gpuRequestNum.Value())
-	jobWorkerReplicas := int(*jobReplicasSetSpec.Replicas)
-
-	jobTemp := jobToBeTested.GetJob()
-	jobTempName := jobTemp.ObjectMeta.Name
-	jobTempBatchSize := jobTemp.Spec.BatchSize
-	jobTempMinReplicas := jobTemp.Spec.MinInstance
-	jobTempModelName := jobTemp.Spec.ModelName
-
-	log.Info("pod need CPU ", cpuRequestMilli, ", Mem ", memRequestMega, ", GPU ", gpuRequest, ", Replicas ", jobWorkerReplicas, ", MinReplicas ", jobTempMinReplicas)
-
-	jobWorker := jobWorkerRequest{
-		JobName:           jobTempName,
-		WorkerReplicas:    jobWorkerReplicas,
-		WorkerMinReplicas: jobTempMinReplicas,
-		WorkerCPUReq:      cpuRequestMilli,
-		WorkerMemReq:      memRequestMega,
-		WorkerGPUReq:      gpuRequest,
-		WorkerBatchSize:   jobTempBatchSize,
-		WorkerModelName:   jobTempModelName,
-	}
+	jobWorker := getJobWorkerRequest(jobToBeTested)
+	log.Info("worker to be scheduled need CPU ", jobWorker.WorkerCPUReq, ", Mem ", jobWorker.WorkerMemReq, ", GPU ", jobWorker.WorkerGPUReq, ", Replicas ", jobWorker.WorkerReplicas, ", MinReplicas ", jobWorker.WorkerMinReplicas)
 
 	testRes, placementPlan, PSPlace = buildPlacementPlan(r, jobWorker)
 	log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
@@ -590,6 +597,63 @@ func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
 		}
 	}
 	return diff, false
+}
+
+func (c *Controller) scaleUp(r ClusterResource) (map[string]int, bool) {
+	scaleUpPlan := make(map[string]int)
+	var scaleUpFlag bool = false
+
+	//var currentReplicas int
+	//var maxReplicas int
+	//var PSPlace string
+
+	nodesInfoTemp := r.NodeInfos
+
+	for {
+		change := false
+
+		dryScaleUp := func(j *trainer.TrainingJob, curDiff int) (additional int) {
+			additional = 0
+			jobTemp := j.GetJob()
+			jobWorker := getJobWorkerRequest(j)
+
+			currentReplicas := jobTemp.Status.RunningReplicas + curDiff
+			maxReplicas := jobTemp.Spec.MaxInstance
+			PSPlace := j.PSPlace
+
+			if currentReplicas < maxReplicas {
+				if jobWorker.WorkerCPUReq <= nodesInfoTemp.NodesCPUIdleMilli[PSPlace] && jobWorker.WorkerMemReq <= nodesInfoTemp.NodesMemoryFreeMega[PSPlace] && jobWorker.WorkerGPUReq <= nodesInfoTemp.NodesGPUIdleNum[PSPlace] {
+					additional = 1
+					nodesInfoTemp.NodesCPUIdleMilli[PSPlace] -= jobWorker.WorkerCPUReq
+					nodesInfoTemp.NodesMemoryFreeMega[PSPlace] -= jobWorker.WorkerMemReq
+					nodesInfoTemp.NodesGPUIdleNum[PSPlace] -= jobWorker.WorkerGPUReq
+				}
+			}
+
+			if additional != 0 {
+				scaleUpFlag = true
+				change = true
+			}
+
+			return
+
+		}
+
+		for _, j := range c.runningQueueJob {
+			jobTemp := j.Value.GetJob()
+			if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
+				add := dryScaleUp(j.Value, scaleUpPlan[jobTemp.ObjectMeta.Name])
+				scaleUpPlan[jobTemp.ObjectMeta.Name] += add
+				log.Info("current job to scale up is %v and the current scaleUpPlan is %v", jobTemp.ObjectMeta.Name, scaleUpPlan)
+			}
+		}
+
+		if change == false {
+			break
+		}
+	}
+	log.Info("scaleUp function finish the scaleUpPlan is %v", scaleUpPlan)
+	return scaleUpPlan, scaleUpFlag
 }
 
 // syncTFJob will sync the job with the given. This function is not meant to be invoked
@@ -751,6 +815,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	log.Info("testRes", testRes, placementPlan, PSPlace)
 	if testRes == true {
+
+		c.scaleUpCounter = 0 //如果有job，counter歸零
+
 		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
 		c.runningQueueJob = append(c.runningQueueJob, jobTemp)
 		jobTemp.Value.StartRunTimeSetTime()
@@ -767,6 +834,30 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			log.Info("============")
 		}
 	}
+	scaleUpPlan := make(map[string]int)
+	var scaleUpFlag bool = false
+
+	if testRes == false && enoughRes == false { //如果沒有job且enoughRes是false，則 counter += 1
+		c.scaleUpCounter += 1
+		if c.scaleUpCounter > 10 {
+			scaleUpPlan, scaleUpFlag = scaleUp(r)
+			log.Info("c.scaleUpCounter > 10 and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+		}
+	}
+
+	// 如果超過10次沒有job可以執行，就執行scale up
+	// 用一個counter記錄這次有沒有job可以執行
+	// 如果有job，counter歸零
+	// 如果沒有job，但是enoughRes是true，表示這一輪要透過scaledown來空出資源給下一輪選出的job跑，counter歸零
+	// 如果沒有job且enoughRes是false，則 counter += 1
+	//
+	// 如果counter>10
+	// 1. counter 歸零
+	// 2. 跑scaleup算法找出scaleupPlan
+	// 3. 如果scaleupNum存在且scaleupRes = true
+	// 4. 該job在reconcile時，進行scaleup
+
+	// scaleup只會scale在同一個node裡面，跟PSPlace同一個node上面
 
 	for index, j := range c.runningQueueJob {
 
@@ -800,16 +891,23 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 		jobTemp := j.Value.GetJob()
 
-		scaledownNum, ok := diff[jobTemp.ObjectMeta.Name]
+		scaledownNum, downok := diff[jobTemp.ObjectMeta.Name]
+		scaleUpNum, upok := scaleUpPlan[jobTemp.ObjectMeta.Name]
 
-		if ok && enoughRes == true {
+		if downok && enoughRes == true {
+			c.scaleUpCounter = 0 //如果沒有job，但是enoughRes是true，表示這一輪要透過scaledown來空出資源給下一輪選出的job跑，counter歸零
 			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is going to scale down, scaledownNum: %v", scaledownNum)
-			if err := j.Value.Reconcile(scaledownNum, true); err != nil {
+			if err := j.Value.Reconcile(scaledownNum, true, false); err != nil {
+				return false, err
+			}
+		} else if upok && scaleUpFlag == true {
+			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is going to scale Up, scaleUpNum: %v", scaleUpNum)
+			if err := j.Value.Reconcile(scaleUpNum, false, true); err != nil {
 				return false, err
 			}
 		} else {
 			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is NOT going to scale down!!!")
-			if err := j.Value.Reconcile(0, false); err != nil {
+			if err := j.Value.Reconcile(0, false, false); err != nil {
 				return false, err
 			}
 		}

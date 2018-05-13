@@ -666,6 +666,11 @@ func (j *TrainingJob) ScaleDown(scaledownNum int) string {
 	return PSPlace
 }
 
+func (j *TrainingJob) ScaleUp(scaleUpNum int) {
+	j.placementPlan[j.PSPlace] += scaleUpNum
+	return
+}
+
 func (j *TrainingJob) DoScale(trainingSteps int) error {
 
 	// delete current worker pods/service and PS pods/service
@@ -728,10 +733,10 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 }
 
 // Reconcile tries to get the job into the desired state.
-func (j *TrainingJob) Reconcile(scaledownNum int, scaledownFlag bool) error {
+func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bool) error {
 	if scaledownFlag == true {
 		j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
-		PSPlace := j.ScaleDown(scaledownNum)
+		PSPlace := j.ScaleDown(scaleNum)
 		j.PSPlace = PSPlace
 		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 		trainingSteps, err := j.GetTrainingSteps()
@@ -746,6 +751,24 @@ func (j *TrainingJob) Reconcile(scaledownNum int, scaledownFlag bool) error {
 			return err
 		}
 		j.contextLogger.Infof("!!!job: %v ScaleDown Successfully!!!", j.job.ObjectMeta.Name)
+	}
+
+	if scaleUpFlag == true {
+		j.contextLogger.Infof("job: %v  is going to scale UP", j.job.ObjectMeta.Name)
+		j.ScaleUp(scaleNum)
+		j.contextLogger.Infof("job: %v  after scale UP, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+		trainingSteps, err := j.GetTrainingSteps()
+		if err != nil {
+			j.contextLogger.Infof("job: %v has error when GetTrainingSteps error: %v ", j.job.ObjectMeta.Name, err)
+			return err
+		}
+		err = j.DoScale(trainingSteps)
+		if err != nil {
+			j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
+			return err
+		}
+		j.contextLogger.Infof("!!!job: %v ScaleUp Successfully!!!", j.job.ObjectMeta.Name)
+
 	}
 
 	j.SetCurrentRunningReplicas()
