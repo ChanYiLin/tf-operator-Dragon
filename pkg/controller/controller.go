@@ -631,7 +631,6 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	}
 
-	log.Info("testRes", testRes, placementPlan, PSPlace)
 	if testRes == true {
 		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
 		c.runningQueueJob = append(c.runningQueueJob, jobTemp)
