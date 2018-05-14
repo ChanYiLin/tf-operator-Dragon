@@ -320,7 +320,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 	var nodeCPUIdleMilli int64
 	var nodeMemFreeMega int64
 	var nodeGPUIdleNum int
-	var nodeBatchSize int
+	//var nodeBatchSize int
 
 	var testRes bool
 	placementPlan := make(map[string]int)
@@ -338,7 +338,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeCPUIdleMilli = idle
 		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
-		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+		//nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
 		log.Info("In buildPlacementPlan: all node")
 
@@ -363,7 +363,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeCPUIdleMilli = idle
 		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
-		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+		//nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
 		log.Info("In buildPlacementPlan: single node")
 
