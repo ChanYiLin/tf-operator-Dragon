@@ -320,7 +320,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 	var nodeCPUIdleMilli int64
 	var nodeMemFreeMega int64
 	var nodeGPUIdleNum int
-	var nodeBatchSize int
+	//var nodeBatchSize int
 
 	var testRes bool
 	placementPlan := make(map[string]int)
@@ -338,11 +338,11 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeCPUIdleMilli = idle
 		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
-		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+		//nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
 		log.Info("In buildPlacementPlan: all node")
 
-		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerReplicas+nodeBatchSize < 256) {
+		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum {
 			placementPlan[name] = jobWorker.WorkerReplicas
 			PSPlace = name
 			testRes = true
@@ -363,13 +363,13 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 		nodeCPUIdleMilli = idle
 		nodeMemFreeMega = r.NodeInfos.NodesMemoryFreeMega[name]
 		nodeGPUIdleNum = r.NodeInfos.NodesGPUIdleNum[name]
-		nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
+		//nodeBatchSize = r.NodeInfos.NodeBatchSize[name]
 
 		log.Info("In buildPlacementPlan: single node")
 
 		for workerCount > 0 {
 			flag = false
-			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
+			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum {
 				//log.Info("node:", name, "has enough resource for one worker.")
 				placementPlan[name] += 1
 				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
