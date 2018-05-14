@@ -369,7 +369,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 
 		for workerCount > 0 {
 			flag = false
-			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize+nodeBatchSize < 256) {
+			if jobWorker.WorkerCPUReq <= nodeCPUIdleMilli && jobWorker.WorkerMemReq <= nodeMemFreeMega && jobWorker.WorkerGPUReq <= nodeGPUIdleNum {
 				//log.Info("node:", name, "has enough resource for one worker.")
 				placementPlan[name] += 1
 				nodeCPUIdleMilli -= jobWorker.WorkerCPUReq
