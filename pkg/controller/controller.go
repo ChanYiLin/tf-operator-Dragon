@@ -342,7 +342,7 @@ func buildPlacementPlan(r ClusterResource, jobWorker jobWorkerRequest) (bool, ma
 
 		log.Info("In buildPlacementPlan: all node")
 
-		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum && (jobWorker.WorkerBatchSize*jobWorker.WorkerReplicas+nodeBatchSize < 256) {
+		if jobWorker.WorkerCPUReq*int64(jobWorker.WorkerReplicas) <= nodeCPUIdleMilli && jobWorker.WorkerMemReq*int64(jobWorker.WorkerReplicas) <= nodeMemFreeMega && jobWorker.WorkerGPUReq*jobWorker.WorkerReplicas <= nodeGPUIdleNum {
 			placementPlan[name] = jobWorker.WorkerReplicas
 			PSPlace = name
 			testRes = true
