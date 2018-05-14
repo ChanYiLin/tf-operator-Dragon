@@ -567,7 +567,7 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	log.Info("worker to be scheduled need CPU ", jobWorker.WorkerCPUReq, ", Mem ", jobWorker.WorkerMemReq, ", GPU ", jobWorker.WorkerGPUReq, ", Replicas ", jobWorker.WorkerReplicas, ", MinReplicas ", jobWorker.WorkerMinReplicas)
 
 	testRes, placementPlan, PSPlace = buildPlacementPlan(r, jobWorker)
-	log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
+	//log.Info("In ScheduleTest testRes, placementPlan, PSPlace: ", testRes, placementPlan, PSPlace)
 
 	//jobTemp := j.GetJob()
 	//jobTempMinReplicas := jobTemp.Spec.MinInstance

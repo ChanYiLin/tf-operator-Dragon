@@ -530,7 +530,7 @@ func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, e
 
 func (j *TrainingJob) getLogOfPod() (string, error) {
 
-	j.contextLogger.Infof("get Worker0: %v of job: %v", j.Worker0Name, j.job.ObjectMeta.Name)
+	//j.contextLogger.Infof("get Worker0: %v of job: %v", j.Worker0Name, j.job.ObjectMeta.Name)
 
 	client := j.KubeCli.CoreV1().RESTClient()
 
@@ -751,7 +751,7 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 // Reconcile tries to get the job into the desired state.
 func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bool) error {
 	if scaledownFlag == true {
-		j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
+		//j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
 		PSPlace := j.ScaleDown(scaleNum)
 		j.PSPlace = PSPlace
 		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
@@ -773,7 +773,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 	}
 
 	if scaleUpFlag == true {
-		j.contextLogger.Infof("job: %v  is going to scale UP", j.job.ObjectMeta.Name)
+		//j.contextLogger.Infof("job: %v  is going to scale UP", j.job.ObjectMeta.Name)
 		j.ScaleUp(scaleNum)
 		j.contextLogger.Infof("job: %v  after scale UP, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 

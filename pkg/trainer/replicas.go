@@ -469,7 +469,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 
 	for index := int32(0); index < *s.Spec.Replicas; index++ {
 
-		s.contextLogger.Infof("Job %s *s.Spec.Replicas: %v", s.Job.name(), localPlacementPlan)
+		//s.contextLogger.Infof("Job %s *s.Spec.Replicas: %v", s.Job.name(), localPlacementPlan)
 
 		// Label to get all pods of this TFReplicaType + index
 		labels := s.LabelsByIndex(index)
@@ -496,7 +496,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 		if len(pl.Items) != 0 {
 			if pl.Items[0].ObjectMeta.DeletionTimestamp != nil {
 				deleteFlag = true
-				s.contextLogger.Infof("Job %s pod for replica %s index %s is going to delete with timestamp %v", s.Job.name(), string(s.Spec.TFReplicaType), index, pl.Items[0].ObjectMeta.DeletionTimestamp)
+				//s.contextLogger.Infof("Job %s pod for replica %s index %s is going to delete with timestamp %v", s.Job.name(), string(s.Spec.TFReplicaType), index, pl.Items[0].ObjectMeta.DeletionTimestamp)
 			}
 		}
 
