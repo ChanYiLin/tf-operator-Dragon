@@ -841,7 +841,14 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	var scaleUpFlag bool = false
 
 	if testRes == false && enoughRes == false { //如果沒有job且enoughRes是false，則 counter += 1
-		c.scaleUpCounter += 1
+		if len(c.scheduleQueueJob) == 0 {
+			c.scaleUpCounter += 1
+		}
+
+		if len(c.scheduleQueueJob) > 0 {
+			c.scaleUpCounter += (1 / len(c.scheduleQueueJob))
+		}
+
 		log.Info("====****==== c.scaleUpCounter :%v ====****==== ", c.scaleUpCounter)
 		if c.scaleUpCounter > 5 {
 			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
