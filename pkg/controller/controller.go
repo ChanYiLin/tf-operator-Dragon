@@ -793,6 +793,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	var scheduleEmptyFlag bool = true
 
+	// 一次把所有的job都測過一次
+	// 可以放進去的都放進去
+
 	for index, j := range c.scheduleQueueJob {
 
 		scheduleEmptyFlag = false
@@ -817,6 +820,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	var enoughRes bool = false
 
 	log.Info("testRes", testRes, placementPlan, PSPlace)
+
+	// scale down 時，先看剛剛scheduling跑出來的job開始做scale down
+
 	if testRes == true {
 
 		c.scaleUpCounter = 0 //如果有job，counter歸零
