@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -160,7 +162,7 @@ type Controller struct {
 
 	cluster *Cluster
 
-	scaleUpCounter int
+	scaleUpTimer string
 
 	/*** Jack Lin ***/
 
@@ -214,7 +216,6 @@ func New(cluster *Cluster, kubeClient kubernetes.Interface, tfJobClient tfjobcli
 		runningQueueJob:  make(QueueJobsList, 0),
 		finishQueueJob:   make(QueueJobsList, 0),
 		cluster:          cluster,
-		scaleUpCounter:   0,
 		/*** Jack Lin ***/
 	}
 
@@ -575,7 +576,12 @@ func (c *Controller) ScheduleTest(r ClusterResource, jobToBeTested *trainer.Trai
 	return testRes, placementPlan, PSPlace, jobWorker.WorkerMinReplicas
 }
 
-func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
+func (c *Controller) scaleDown(r ClusterResource, minmin int) (map[string]int, bool) {
+	minminTemp := minmin
+	for name, _ := range r.NodeInfos.NodesCPUIdleMilli {
+		minminTemp -= r.NodeInfos.NodesGPUIdleNum[name]
+	}
+
 	diff := make(map[string]int)
 	var additional int
 	var currentReplicas int
@@ -593,7 +599,7 @@ func (c *Controller) scaleDown(minmin int) (map[string]int, bool) {
 				currentReplicas -= 1
 				additional += 1
 				diff[jobTemp.ObjectMeta.Name] -= 1
-				if additional >= minmin {
+				if additional >= minminTemp {
 					return diff, true
 				}
 			}
@@ -657,6 +663,20 @@ func (c *Controller) scaleUp(r ClusterResource) (map[string]int, bool) {
 	}
 	log.Info("scaleUp function finish the scaleUpPlan is %v", scaleUpPlan)
 	return scaleUpPlan, scaleUpFlag
+}
+
+func (c *Controller) testScaleDown(minmin int) bool {
+	surplus := 0
+	for _, j := range c.runningQueueJob {
+		minReplicas := getJobWorkerRequest(j.Value).WorkerMinReplicas
+		jobTemp := j.Value.GetJob()
+		surplus += jobTemp.Status.RunningReplicas - minReplicas
+	}
+	if surplus > minmin {
+		return true
+	} else {
+		return false
+	}
 }
 
 // syncTFJob will sync the job with the given. This function is not meant to be invoked
@@ -793,27 +813,94 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	var scheduleEmptyFlag bool = true
 
-	// 一次把所有的job都測過一次
-	// 可以放進去的都放進去
-
-	for index, j := range c.scheduleQueueJob {
+	// 先判斷等候時間超過3min的job
+	for _, j := range c.scheduleQueueJob {
 
 		scheduleEmptyFlag = false
+		scaleDownFlag := false
+		jobTemp := j.Value.GetJob()
+		enqueueTime := jobTemp.Status.EnqueueScheduleTime
+		currentTime := time.Now().Format("2006.01.02-15:04:05")
 
-		testRes, placementPlan, PSPlace, minReplicas = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
-		if testRes == true {
-			jobToRun = c.jobs[j.Key]
-			jobKey = j.Key
-			c.scheduleQueueJob = RemoveIndex(c.scheduleQueueJob, index)
-			break
-		} else {
-			jobToRun = nil
-			if minReplicas < minmin {
-				minmin = minReplicas
-				minminjob = j.Key
+		et, _ := time.Parse("2006.01.02-15:04:05", enqueueTime)
+		ct, _ := time.Parse("2006.01.02-15:04:05", currentTime)
+
+		timeDiff := ct.Sub(et).String()
+
+		if strings.ContainsAny(timeDiff, "m") == true {
+			fmt.Println(timeDiff)
+			minuteStr := strings.Split(timeDiff, "m")
+			fmt.Println(minuteStr)
+			minuteInt, _ := strconv.Atoi(minuteStr[0])
+			if minuteInt >= 2 || strings.ContainsAny(timeDiff, "h") {
+				log.Info("***job: ", j.Key, " has waited for over 2 minutes!***")
+				scaleDownFlag = true
 			}
+		} else {
+			scaleDownFlag = false
 		}
 
+		// 表示這個job等超過三分鐘且他的minReplicas比目前最小的minmin小，選它作為要跑的job
+		if minReplicas < minmin && scaleDownFlag == true {
+			minmin = minReplicas
+			minminjob = j.Key
+		}
+	}
+
+	// 如果上面挑不出job，這邊minmin會是100，怎樣都會是false
+
+	executeScaleDownFlag := c.testScaleDown(minmin)
+	// ifScaleDownFlag = true表示這個job可以透過scaledown來達成執行，不挑新的job
+	// 這一輪會先scale down空出資源
+	// 下一輪會等候超過三分鐘的job會因為都用min跑了沒辦法scale down這邊會顯示false
+	// 然後跑下面的迴圈在前面的job等超過三分鐘且可以下去跑的job就會被選出來
+
+	// 只有挑不出可以用scale來執行的job才會用正常方法挑job執行
+	if executeScaleDownFlag == false {
+		for index, j := range c.scheduleQueueJob {
+
+			scheduleEmptyFlag = false
+
+			testRes, placementPlan, PSPlace, minReplicas = c.ScheduleTest(r, c.jobs[j.Key]) // j is a *trainer.TrainingJob
+			if testRes == true {
+				jobToRun = c.jobs[j.Key]
+				jobKey = j.Key
+				c.scheduleQueueJob = RemoveIndex(c.scheduleQueueJob, index)
+				break
+			}
+			/*else {
+				jobToRun = nil
+
+				enqueueTime := j.Value.status.EnqueueScheduleTime
+				currentTime := time.Now().Format("2006.01.02-15:04:05")
+
+				et, _ := time.Parse("2006.01.02-15:04:05", enqueueTime)
+				ct, _ := time.Parse("2006.01.02-15:04:05", currentTime)
+
+				timeDiff := ct.Sub(et).String()
+
+				if strings.ContainsAny(timeDiff, "m") == true {
+					fmt.Println(timeDiff)
+					minuteStr := strings.Split(timeDiff, "m")
+					fmt.Println(minuteStr)
+					minuteInt, _ := strconv.Atoi(minuteStr[0])
+					if minuteInt >= 3 || strings.ContainsAny(timeDiff, "h") {
+						log.Info("***job: ", j.Key, " has waited for over 3 minutes!***")
+						scaleDownFlag = true
+					}
+				} else {
+					scaleDownFlag = false
+				}
+
+				if minReplicas < minmin && scaleDownFlag == true {
+					minmin = minReplicas
+					minminjob = j.Key
+				}
+			}*/
+
+		}
+	} else { // executeScaleDownFlag = true // 表示有job要scale down來執行執行
+		testRes = false
 	}
 
 	diff := make(map[string]int)
@@ -821,11 +908,10 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 	log.Info("testRes", testRes, placementPlan, PSPlace)
 
-	// scale down 時，先看剛剛scheduling跑出來的job開始做scale down
-
 	if testRes == true {
 
-		c.scaleUpCounter = 0 //如果有job，counter歸零
+		// c.scaleUpCounter = 0 //
+		c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05") //如果有job，Timer設為現在時間
 
 		jobTemp = QueueJobs{Key: jobKey, Value: jobToRun}
 		c.runningQueueJob = append(c.runningQueueJob, jobTemp)
@@ -836,7 +922,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		}
 	} else {
 		if scheduleEmptyFlag == false {
-			diff, enoughRes = c.scaleDown(minmin)
+			diff, enoughRes = c.scaleDown(r, minmin)
 			log.Info("============")
 			log.Info("there is a job in scheduler cannot be run, the minmijob, ", minminjob, " with minmin Replicas: ", minmin)
 			log.Info("after scale Down, diff: ", diff, " enoughRes: ", enoughRes)
@@ -847,19 +933,43 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 	var scaleUpFlag bool = false
 
 	if testRes == false && enoughRes == false { //如果沒有job且enoughRes是false，則 counter += 1
-		if len(c.scheduleQueueJob) == 0 {
+		/*if len(c.scheduleQueueJob) == 0 {
 			c.scaleUpCounter += 1
 		}
 
 		if len(c.scheduleQueueJob) > 0 {
 			c.scaleUpCounter += (1 / len(c.scheduleQueueJob))
+		}*/
+
+		//c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
+		over3MinUP := false
+		currentTime := time.Now().Format("2006.01.02-15:04:05")
+
+		upt, _ := time.Parse("2006.01.02-15:04:05", c.scaleUpTimer)
+		ct, _ := time.Parse("2006.01.02-15:04:05", currentTime)
+
+		timeDiff := ct.Sub(upt).String()
+
+		if strings.ContainsAny(timeDiff, "m") == true {
+			fmt.Println(timeDiff)
+			minuteStr := strings.Split(timeDiff, "m")
+			fmt.Println(minuteStr)
+			minuteInt, _ := strconv.Atoi(minuteStr[0])
+			if minuteInt >= 3 || strings.ContainsAny(timeDiff, "h") {
+				log.Info("@@@@ scale up timer has over 3 min @@@@")
+				over3MinUP = true
+			} else {
+				over3MinUP = false
+			}
+		} else {
+			over3MinUP = false
 		}
 
-		log.Info("====****==== c.scaleUpCounter :%v ====****==== ", c.scaleUpCounter)
-		if c.scaleUpCounter > 5 {
+		log.Info("====****==== Scale Up timeDiff :%v ====****==== ", timeDiff)
+		if over3MinUP == true {
 			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
-			log.Info("c.scaleUpCounter > 10 and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
-			c.scaleUpCounter = 0
+			log.Info("Scale Up timeDiff > 3 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+			c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
 		}
 	}
 
@@ -912,19 +1022,19 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		scaledownNum, downok := diff[jobTemp.ObjectMeta.Name]
 		scaleUpNum, upok := scaleUpPlan[jobTemp.ObjectMeta.Name]
 
-		if downok && enoughRes == true {
-			c.scaleUpCounter = 0 //如果沒有job，但是enoughRes是true，表示這一輪要透過scaledown來空出資源給下一輪選出的job跑，counter歸零
+		if downok && enoughRes == true && scaledownNum != 0 {
+			c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05") //如果沒有job，但是enoughRes是true，表示這一輪要透過scaledown來空出資源給下一輪選出的job跑，Timer設為現在時間
 			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is going to scale down, scaledownNum: %v", scaledownNum)
 			if err := j.Value.Reconcile(scaledownNum, true, false); err != nil {
 				return false, err
 			}
-		} else if upok && scaleUpFlag == true {
+		} else if upok && scaleUpFlag == true && scaleUpNum != 0 {
 			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is going to scale Up, scaleUpNum: %v", scaleUpNum)
 			if err := j.Value.Reconcile(scaleUpNum, false, true); err != nil {
 				return false, err
 			}
 		} else {
-			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is NOT going to scale down!!!")
+			log.Info("in for running queue job: %v", jobTemp.ObjectMeta.Name, "is NOT going to scale down or up!!!")
 			if err := j.Value.Reconcile(0, false, false); err != nil {
 				return false, err
 			}

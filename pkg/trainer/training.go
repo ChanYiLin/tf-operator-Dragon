@@ -689,11 +689,6 @@ func (j *TrainingJob) ScaleUp(scaleUpNum int) {
 
 func (j *TrainingJob) DoScale(trainingSteps int) error {
 
-	// delete current worker pods/service and PS pods/service
-	if cErr := j.deleteResources(); cErr != nil {
-		j.contextLogger.Errorf("trainingJob.deleteResources() error; %v", cErr)
-	}
-
 	var originalTrainingSteps int = 0
 	var leftTrainingSteps int = 0
 
@@ -706,6 +701,11 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 			originalTrainingSteps = trainsteps
 			break
 		}
+	}
+
+	// delete current worker pods/service and PS pods/service
+	if cErr := j.deleteResources(); cErr != nil {
+		j.contextLogger.Errorf("trainingJob.deleteResources() error; %v", cErr)
 	}
 
 	// calculate left training steps and update the jobs

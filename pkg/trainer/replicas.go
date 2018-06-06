@@ -279,19 +279,19 @@ func (s *TFReplicaSet) Delete() error {
 		LabelSelector: selector,
 	}
 
-	s.contextLogger.Infof("Deleting Jobs namespace=%v selector=%v", s.Job.job.ObjectMeta.Namespace, selector)
-	err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).DeleteCollection(&meta_v1.DeleteOptions{}, options)
+	//s.contextLogger.Infof("Deleting Jobs namespace=%v selector=%v", s.Job.job.ObjectMeta.Namespace, selector)
+	//err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).DeleteCollection(&meta_v1.DeleteOptions{}, options)
 
-	if err != nil {
-		s.contextLogger.Errorf("There was a problem deleting the jobs; %v", err)
-		failures = true
-	}
+	//if err != nil {
+	//	s.contextLogger.Errorf("There was a problem deleting the jobs; %v", err)
+	//	failures = true
+	//}
 
 	// We need to delete the completed pods.
 	s.contextLogger.Infof("Deleting Pods namespace=%v selector=%v", s.Job.job.ObjectMeta.Namespace, selector)
 	err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).DeleteCollection(&meta_v1.DeleteOptions{}, options)
 
-	if err != nil {
+	if err != nil && k8s_errors.IsNotFound(err) != true {
 		s.contextLogger.Errorf("There was a problem deleting the pods; %v", err)
 		failures = true
 	}
@@ -305,8 +305,12 @@ func (s *TFReplicaSet) Delete() error {
 		err = s.ClientSet.CoreV1().Services(s.Job.job.ObjectMeta.Namespace).Delete(s.genName(index), &meta_v1.DeleteOptions{})
 
 		if err != nil {
-			s.contextLogger.Errorf("Error deleting service %v; %v", s.genName(index), err)
-			failures = true
+			if !k8sutil.IsKubernetesResourceNotFoundError(err) {
+				s.contextLogger.Errorf("Error deleting service %v; %v", s.genName(index), err)
+				failures = true
+			} else {
+				continue
+			}
 		}
 	}
 
