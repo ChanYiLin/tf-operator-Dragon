@@ -819,6 +819,10 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		scheduleEmptyFlag = false
 		scaleDownFlag := false
 		jobTemp := j.Value.GetJob()
+
+
+
+
 		enqueueTime := jobTemp.Status.EnqueueScheduleTime
 		currentTime := time.Now().Format("2006.01.02-15:04:05")
 
@@ -832,13 +836,15 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			minuteStr := strings.Split(timeDiff, "m")
 			fmt.Println(minuteStr)
 			minuteInt, _ := strconv.Atoi(minuteStr[0])
-			if minuteInt >= 2 || strings.ContainsAny(timeDiff, "h") {
-				log.Info("***job: ", j.Key, " has waited for over 2 minutes!***")
+			if minuteInt >= 1 || strings.ContainsAny(timeDiff, "h") {
+				log.Info("***job: ", j.Key, " has waited for over 1 minutes!***")
 				scaleDownFlag = true
 			}
 		} else {
 			scaleDownFlag = false
 		}
+
+		minReplicas = jobTemp.Spec.MinInstance
 
 		// 表示這個job等超過三分鐘且他的minReplicas比目前最小的minmin小，選它作為要跑的job
 		if minReplicas < minmin && scaleDownFlag == true {
@@ -942,7 +948,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		}*/
 
 		//c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
-		over3MinUP := false
+		overMinUP := false
 		currentTime := time.Now().Format("2006.01.02-15:04:05")
 
 		upt, _ := time.Parse("2006.01.02-15:04:05", c.scaleUpTimer)
@@ -955,20 +961,20 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			minuteStr := strings.Split(timeDiff, "m")
 			fmt.Println(minuteStr)
 			minuteInt, _ := strconv.Atoi(minuteStr[0])
-			if minuteInt >= 3 || strings.ContainsAny(timeDiff, "h") {
-				log.Info("@@@@ scale up timer has over 3 min @@@@")
-				over3MinUP = true
+			if minuteInt >= 5 || strings.ContainsAny(timeDiff, "h") {
+				log.Info("@@@@ scale up timer has over 5 min @@@@")
+				overMinUP = true
 			} else {
-				over3MinUP = false
+				overMinUP = false
 			}
 		} else {
-			over3MinUP = false
+			overMinUP = false
 		}
 
 		log.Info("====****==== Scale Up timeDiff :%v ====****==== ", timeDiff)
-		if over3MinUP == true {
+		if overMinUP == true {
 			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
-			log.Info("Scale Up timeDiff > 3 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+			log.Info("Scale Up timeDiff > 5 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
 			c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
 		}
 	}

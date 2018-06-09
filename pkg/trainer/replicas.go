@@ -266,6 +266,36 @@ func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string, replicaType 
 	return s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).Create(pod)
 }
 
+func (s *TFReplicaSet) DeleteSpecificPod(nodeName string) error {
+
+	selector, err := s.Labels().ToSelector()
+	if err != nil {
+		return err
+	}
+
+	options := meta_v1.ListOptions{
+		LabelSelector: selector,
+	}
+	//l v1.PodList
+	l, _ := s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).List(options)
+
+	for _, pod := range l.Items {
+		if pod.Spec.NodeName == nodeName{
+			err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).Delete(pod.ObjectMeta.Name, nil)
+
+			if err != nil && k8s_errors.IsNotFound(err) != true {
+				s.contextLogger.Errorf("There was a problem deleting the pods; %v", err)
+				return err
+			}
+			break
+		}
+	}
+
+	return nil
+
+}
+
+
 // Delete deletes the replicas
 func (s *TFReplicaSet) Delete() error {
 	selector, err := s.Labels().ToSelector()

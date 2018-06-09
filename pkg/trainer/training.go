@@ -408,8 +408,10 @@ func (j *TrainingJob) JobFinishSetTime() error {
 	return nil
 }
 
-func (j *TrainingJob) SetCurrentRunningReplicas() error {
+func (j *TrainingJob) SetCurrentRunningReplicas() (int, int, error) {
 	var count int
+	var oldReplcias int = j.currentReplicas
+	var newReplicas int
 
 	for _, tempCount := range j.placementPlan {
 		count += tempCount
@@ -419,16 +421,18 @@ func (j *TrainingJob) SetCurrentRunningReplicas() error {
 	*newJob.Spec.ReplicaSpecs[0].Replicas = int32(count)
 	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
 	if err != nil {
-		return err
+		return oldReplcias, newReplicas, err
 	}
 	j.job = newJob
 
 	j.currentReplicas = count
 	j.status.RunningReplicas = count
 
+	newReplicas = count
+
 	if err := j.updateCRDStatus(); err != nil {
 		j.contextLogger.Warningf("failed to update CRD status: %v", err)
-		return err
+		return oldReplcias, newReplicas, err
 	}
 
 	//refresh j.Replicas
@@ -436,17 +440,17 @@ func (j *TrainingJob) SetCurrentRunningReplicas() error {
 	for _, t := range j.job.Spec.ReplicaSpecs {
 		r, err := NewTFReplicaSet(j.KubeCli, j.recorder, *t, j)
 		if err != nil {
-			return err
+			return oldReplcias, newReplicas, err
 		}
 		j.Replicas = append(j.Replicas, r)
 	}
 
 	if err := j.updateCRDStatus(); err != nil {
 		j.contextLogger.Warningf("failed to update CRD status: %v", err)
-		return err
+		return oldReplcias, newReplicas, err
 	}
 
-	return nil
+	return oldReplcias, newReplicas, nil
 }
 
 /*
@@ -488,9 +492,28 @@ func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 // when the job is selected and put into running queue, then create the pods of the job for real running
 func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool, placementPlan map[string]int, PSPlace string) error {
 
+
+
+
+
+
 	j.placementPlan = placementPlan
 	j.PSPlace = PSPlace
 	j.SetCurrentRunningReplicas()
+
+
+	newJob := j.job
+
+	// 當一個job開始執行時，要設定他每個worker的training steps
+	var workerSteps int = j.job.Spec.TotalNumber / j.currentReplicas
+	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(workerSteps)
+
+
+
+	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
+	if err != nil {
+		return err
+	}
 
 	// sync PDB for gang scheduling
 	// TODO(mitake): replace PDB with a newer mechanism if it is replaced
@@ -528,13 +551,13 @@ func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, e
 
 }
 
-func (j *TrainingJob) getLogOfPod() (string, error) {
+func (j *TrainingJob) getLogOfPod(podName string) (string, error) {
 
 	//j.contextLogger.Infof("get Worker0: %v of job: %v", j.Worker0Name, j.job.ObjectMeta.Name)
 
 	client := j.KubeCli.CoreV1().RESTClient()
 
-	pod, err := j.KubeCli.CoreV1().Pods(j.job.ObjectMeta.Namespace).Get(j.Worker0Name, meta_v1.GetOptions{})
+	pod, err := j.KubeCli.CoreV1().Pods(j.job.ObjectMeta.Namespace).Get(podName, meta_v1.GetOptions{})
 	//j.contextLogger.Infof("get Worker0 pods: %v ", pod)
 
 	if err != nil {
@@ -579,51 +602,69 @@ func (j *TrainingJob) getLogOfPod() (string, error) {
 	return string(result), nil
 }
 
-// do the real scale:
-// get the current training steps
-// delete current all pod and service and other resources
-// recreate all pod based on new j.placementPlan
+
 
 func (j *TrainingJob) GetTrainingSteps() (int, error) {
 
-	var trainSteps int = 0
+	var totaltrainingSteps int = 0
 
-	logs, err := j.getLogOfPod()
-	if err != nil {
-		j.contextLogger.Infof("error in GetTrainingSteps after getLogOfPod: %v", err)
-		return 0, err
-	}
+	//挑出Worker Replicas
+	for _, r := range j.Replicas {
+		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
 
-	sliceTemp := strings.Split(logs, "\n")
-	last := len(sliceTemp)
-	if last < 2 {
-		trainSteps = 0 // <=
-	} else {
-		if strings.Contains(sliceTemp[last-2], "images/sec") {
-			// last line: "2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60\timages/sec: 102.4 +/- 0.7 (jitter = 5.3)\t12.258"
-			lastLine := sliceTemp[last-2]
+			selector, err := r.Labels().ToSelector()
+			if err != nil {
+				return 0, err
+			}
+			options := meta_v1.ListOptions{
+				LabelSelector: selector,
+			}
+			//取的所有worker pod
+			l, _ := j.KubeCli.CoreV1().Pods("jack-kubeflow").List(options)
+			//對每個workerpod取得log
+			for _, pod := range l.Items {
+				trainSteps := 0
+				j.contextLogger.Infof("get the log of the pod: %v", pod.ObjectMeta.Name)
+				logs, err := j.getLogOfPod(pod.ObjectMeta.Name)
+				if err != nil {
+					j.contextLogger.Infof("error in GetTrainingSteps after getLogOfPod: %v", err)
+					return 0, err
+				}
+				// 算totalsteps
+				sliceTemp := strings.Split(logs, "\n")
+				last := len(sliceTemp)
+				if last < 2 {
+					trainSteps = 0 // <=
+				} else {
+					if strings.Contains(sliceTemp[last-2], "images/sec") {
+						// last line: "2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60\timages/sec: 102.4 +/- 0.7 (jitter = 5.3)\t12.258"
+						lastLine := sliceTemp[last-2]
 
-			// sliceLastLineTemp: ["2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60" "images/sec: 102.4 +/- 0.7 (jitter = 5.3)" "12.258"]
-			sliceLastLineTemp := strings.Split(lastLine, "\t")
+						// sliceLastLineTemp: ["2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60" "images/sec: 102.4 +/- 0.7 (jitter = 5.3)" "12.258"]
+						sliceLastLineTemp := strings.Split(lastLine, "\t")
 
-			// getTrainSteps: ["2018-05-09T15:19:36.629802035Z" "INFO|2018-05-09T15:19:36|/opt/launcher.py|27|" "60"]
-			getTrainSteps := strings.Split(sliceLastLineTemp[0], " ")
+						// getTrainSteps: ["2018-05-09T15:19:36.629802035Z" "INFO|2018-05-09T15:19:36|/opt/launcher.py|27|" "60"]
+						getTrainSteps := strings.Split(sliceLastLineTemp[0], " ")
 
-			//lastStep: 60
-			lastStep, _ := strconv.Atoi(getTrainSteps[2])
+						//lastStep: 60
+						lastStep, _ := strconv.Atoi(getTrainSteps[2])
 
-			trainSteps = lastStep // <=
+						trainSteps = lastStep // <=
 
-		} else {
-			trainSteps = 0 // <=
+					} else {
+						trainSteps = 0 // <=
+					}
+				}
+				totaltrainingSteps += trainSteps
+			}
 		}
 	}
 
-	j.contextLogger.Infof("Get Workers training steps successfully training steps: %v", trainSteps)
+	j.contextLogger.Infof("Get Workers training steps successfully training steps: %v", totaltrainingSteps)
 
 	//Do Scale
 
-	return trainSteps, nil
+	return totaltrainingSteps, nil
 }
 
 //scale down: -2
@@ -635,7 +676,7 @@ func (j *TrainingJob) GetTrainingSteps() (int, error) {
 //	"node2" : 3 workers,
 //}
 
-func (j *TrainingJob) ScaleDown(scaledownNum int) string {
+func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) string {
 
 	node1Num := j.placementPlan["apollo61"]
 	node2Num := j.placementPlan["apollo62"]
@@ -667,14 +708,35 @@ func (j *TrainingJob) ScaleDown(scaledownNum int) string {
 
 	}
 
-	for scaledownNum < 0 || j.placementPlan[small] == 0 {
+	for scaledownNum < 0 && j.placementPlan[small] > 0 {
 		j.placementPlan[small] -= 1
+
+		if doRealScaledown == true { // delete the worker pod on this node
+
+			for _, r := range j.Replicas {
+				if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
+					r.DeleteSpecificPod(small)
+				}
+			}
+		}
+
 		scaledownNum += 1
 	}
 
-	if scaledownNum > 0 {
-		for scaledownNum < 0 || j.placementPlan[big] == 0 {
+	// scaledownNum 還是負的表示還要繼續scale down
+
+	if scaledownNum < 0 {
+		for scaledownNum < 0 && j.placementPlan[big] > 0 {
 			j.placementPlan[big] -= 1
+
+			if doRealScaledown == true { // delete the worker pod on this node
+				for _, r := range j.Replicas {
+					if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
+						r.DeleteSpecificPod(big)
+					}
+				}
+			}
+
 			scaledownNum += 1
 		}
 	}
@@ -687,12 +749,12 @@ func (j *TrainingJob) ScaleUp(scaleUpNum int) {
 	return
 }
 
-func (j *TrainingJob) DoScale(trainingSteps int) error {
+func (j *TrainingJob) DoScale(trainingSteps int, oldReplcias int, newReplicas int) error {
 
 	var originalTrainingSteps int = 0
 	var leftTrainingSteps int = 0
 
-	for _, r := range j.Replicas {
+	/*for _, r := range j.Replicas {
 		if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
 			// --num_batches=200
 			argsTempString := r.Spec.Template.Spec.Containers[0].Args[7]
@@ -701,20 +763,33 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 			originalTrainingSteps = trainsteps
 			break
 		}
-	}
+	}*/
+
+
+	
+
 
 	// delete current worker pods/service and PS pods/service
 	if cErr := j.deleteResources(); cErr != nil {
 		j.contextLogger.Errorf("trainingJob.deleteResources() error; %v", cErr)
 	}
 
+	
+	//var originalTrainingStepsTotal int = j.job.Spec.TotalNumber
+
 	// calculate left training steps and update the jobs
-	leftTrainingSteps = originalTrainingSteps - trainingSteps
+	// (總步數 - 所有worker已經走的步數)/新的replicas數量
+
+	//原總部數另外記錄在TotalNumber，
+	leftTrainingSteps = (j.job.Spec.TotalNumber - trainingSteps) / newReplicas
 	j.contextLogger.Infof("job: %v original trainsteps: %v, currentTrainSteps: %v, leftTrainingSteps: %v", j.job.ObjectMeta.Name, originalTrainingSteps, trainingSteps, leftTrainingSteps)
 
 	newJob := j.job
 	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
-	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
+	// 在Doscale這邊更新TotalNumber為j.job.Spec.TotalNumber - trainingSteps
+	newJob.Spec.TotalNumber = j.job.Spec.TotalNumber - trainingSteps
+
+
 	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
 	if err != nil {
 		return err
@@ -748,15 +823,30 @@ func (j *TrainingJob) DoScale(trainingSteps int) error {
 
 }
 
+
+
+//scale down方法
+//確認要scale down多少個pod
+
+//抓每個worker現在的training steps
+//GetTrainingSteps()
+//1. 如果還沒開始run，return 0，就照原本方法DoScale
+//2. 如果已經開始run，就直接刪掉多出來的
+
+// original training number 要另外統計
+
+
+
 // Reconcile tries to get the job into the desired state.
 func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bool) error {
 	if scaledownFlag == true {
 		//j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
-		PSPlace := j.ScaleDown(scaleNum)
-		j.PSPlace = PSPlace
-		j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+		
+		// PSPlace := j.ScaleDown(scaleNum)
+		// j.PSPlace = PSPlace
+		// j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 
-		j.SetCurrentRunningReplicas()
+		// j.SetCurrentRunningReplicas()
 
 		trainingSteps, err := j.GetTrainingSteps()
 		if err != nil {
@@ -764,11 +854,36 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 			return err
 		}
 
-		err = j.DoScale(trainingSteps)
-		if err != nil {
-			j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
-			return err
+		if trainingSteps == 0 {
+			j.contextLogger.Infof("++++the worker has NNNNOTTTT start to train, so just delete the pod++++++")
+			PSPlace := j.ScaleDown(scaleNum, false)
+			j.PSPlace = PSPlace
+			j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+
+			oldReplcias, newReplicas, _ := j.SetCurrentRunningReplicas()
+			
+			err = j.DoScale(trainingSteps, oldReplcias, newReplicas)
+			if err != nil {
+				j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
+				return err
+			}
+		} else {
+			j.contextLogger.Infof("++++the worker has start to train, so just delete the pod++++++")
+			PSPlace := j.ScaleDown(scaleNum, true)
+			j.PSPlace = PSPlace
+			j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
+
+			j.SetCurrentRunningReplicas()
+
+			//err = j.DoDeleteScale()
+			if err != nil {
+				j.contextLogger.Infof("job: %v has error when DoDeleteScale error: %v ", j.job.ObjectMeta.Name, err)
+				return err
+			}
 		}
+
+		
+
 		j.contextLogger.Infof("!!!job: %v ScaleDown Successfully!!!", j.job.ObjectMeta.Name)
 	}
 
@@ -777,14 +892,14 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 		j.ScaleUp(scaleNum)
 		j.contextLogger.Infof("job: %v  after scale UP, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 
-		j.SetCurrentRunningReplicas()
+		oldReplcias, newReplicas, _ := j.SetCurrentRunningReplicas()
 
 		trainingSteps, err := j.GetTrainingSteps()
 		if err != nil {
 			j.contextLogger.Infof("job: %v has error when GetTrainingSteps error: %v ", j.job.ObjectMeta.Name, err)
 			return err
 		}
-		err = j.DoScale(trainingSteps)
+		err = j.DoScale(trainingSteps, oldReplcias, newReplicas)
 		if err != nil {
 			j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
 			return err
@@ -794,7 +909,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 	}
 
 	if scaleUpFlag == false && scaledownFlag == false {
-		j.SetCurrentRunningReplicas()
+		 j.SetCurrentRunningReplicas()
 	}
 
 	// Call GetStatus in each reconcile loop

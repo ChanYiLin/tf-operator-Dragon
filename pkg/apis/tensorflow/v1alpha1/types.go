@@ -65,6 +65,7 @@ type TFJobSpec struct {
 	MaxInstance int    `json:"max-instance"`
 	BatchSize   int    `json:"batch-size"`
 	ModelName   string `json:"modelName"`
+	TotalNumber int    `json:"total-number"`
 }
 
 // TerminationPolicySpec structure for storing specifications for process termination
