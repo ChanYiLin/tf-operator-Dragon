@@ -327,11 +327,11 @@ func (j *TrainingJob) Delete() {
 	// we shouldn't delete the pods when the jobs finish because leaving the pods
 	// allows us to get the logs from the pods after the job finishes.
 	//
-	j.contextLogger.Infof("TFJob %v deleted by the user", j.fullname())
+	//j.contextLogger.Infof("TFJob %v deleted by the user", j.fullname())
 	// TODO(jlewi): This logic is probably insufficient.
-	if j.job.Status.Phase != tfv1alpha1.TFJobPhaseCleanUp {
-		j.status.Phase = tfv1alpha1.TFJobPhaseCleanUp
-	}
+	//if j.job.Status.Phase != tfv1alpha1.TFJobPhaseCleanUp {
+	//	j.status.Phase = tfv1alpha1.TFJobPhaseCleanUp
+	//}
 
 	// TODO(jlewi): Does it make sense to explicitly delete the resources? Should
 	// we just rely on K8s garbage collection to delete the resources before

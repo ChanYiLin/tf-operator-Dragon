@@ -663,7 +663,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 			// if job succeed then record the finish time.
 			j.Value.JobFinishSetTime()
-
+			j.Delete()
 			jobTemp := QueueJobs{Key: j.Key, Value: j.Value}
 			c.finishQueueJob = append(c.finishQueueJob, jobTemp)
 			continue
