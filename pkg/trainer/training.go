@@ -338,11 +338,11 @@ func (j *TrainingJob) Delete() {
 	// we shouldn't delete the pods when the jobs finish because leaving the pods
 	// allows us to get the logs from the pods after the job finishes.
 	//
-	j.contextLogger.Infof("TFJob %v deleted by the user", j.fullname())
+	//j.contextLogger.Infof("TFJob %v deleted by the user", j.fullname())
 	// TODO(jlewi): This logic is probably insufficient.
-	if j.job.Status.Phase != tfv1alpha1.TFJobPhaseCleanUp {
-		j.status.Phase = tfv1alpha1.TFJobPhaseCleanUp
-	}
+	//if j.job.Status.Phase != tfv1alpha1.TFJobPhaseCleanUp {
+	//	j.status.Phase = tfv1alpha1.TFJobPhaseCleanUp
+	//}
 
 	// TODO(jlewi): Does it make sense to explicitly delete the resources? Should
 	// we just rely on K8s garbage collection to delete the resources before
@@ -492,23 +492,15 @@ func (j *TrainingJob) ArrivalSetup(config *tfv1alpha1.ControllerConfig) error {
 // when the job is selected and put into running queue, then create the pods of the job for real running
 func (j *TrainingJob) CreatePodsAndRunJob(config *tfv1alpha1.ControllerConfig, enableGangScheduling bool, placementPlan map[string]int, PSPlace string) error {
 
-
-
-
-
-
 	j.placementPlan = placementPlan
 	j.PSPlace = PSPlace
 	j.SetCurrentRunningReplicas()
-
 
 	newJob := j.job
 
 	// 當一個job開始執行時，要設定他每個worker的training steps
 	var workerSteps int = j.job.Spec.TotalNumber / j.currentReplicas
 	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(workerSteps)
-
-
 
 	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
 	if err != nil {
@@ -601,8 +593,6 @@ func (j *TrainingJob) getLogOfPod(podName string) (string, error) {
 
 	return string(result), nil
 }
-
-
 
 func (j *TrainingJob) GetTrainingSteps() (int, error) {
 
@@ -765,16 +755,11 @@ func (j *TrainingJob) DoScale(trainingSteps int, oldReplcias int, newReplicas in
 		}
 	}*/
 
-
-	
-
-
 	// delete current worker pods/service and PS pods/service
 	if cErr := j.deleteResources(); cErr != nil {
 		j.contextLogger.Errorf("trainingJob.deleteResources() error; %v", cErr)
 	}
 
-	
 	//var originalTrainingStepsTotal int = j.job.Spec.TotalNumber
 
 	// calculate left training steps and update the jobs
@@ -788,7 +773,6 @@ func (j *TrainingJob) DoScale(trainingSteps int, oldReplcias int, newReplicas in
 	newJob.Spec.ReplicaSpecs[0].Template.Spec.Containers[0].Args[7] = "--num_batches=" + strconv.Itoa(leftTrainingSteps)
 	// 在Doscale這邊更新TotalNumber為j.job.Spec.TotalNumber - trainingSteps
 	newJob.Spec.TotalNumber = j.job.Spec.TotalNumber - trainingSteps
-
 
 	newJob, err := j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
 	if err != nil {
@@ -823,8 +807,6 @@ func (j *TrainingJob) DoScale(trainingSteps int, oldReplcias int, newReplicas in
 
 }
 
-
-
 //scale down方法
 //確認要scale down多少個pod
 
@@ -835,13 +817,11 @@ func (j *TrainingJob) DoScale(trainingSteps int, oldReplcias int, newReplicas in
 
 // original training number 要另外統計
 
-
-
 // Reconcile tries to get the job into the desired state.
 func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bool) error {
 	if scaledownFlag == true {
 		//j.contextLogger.Infof("job: %v  is going to scale down", j.job.ObjectMeta.Name)
-		
+
 		// PSPlace := j.ScaleDown(scaleNum)
 		// j.PSPlace = PSPlace
 		// j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
@@ -861,7 +841,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 			j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 
 			oldReplcias, newReplicas, _ := j.SetCurrentRunningReplicas()
-			
+
 			err = j.DoScale(trainingSteps, oldReplcias, newReplicas)
 			if err != nil {
 				j.contextLogger.Infof("job: %v has error when DoScale error: %v ", j.job.ObjectMeta.Name, err)
@@ -881,8 +861,6 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 				return err
 			}
 		}
-
-		
 
 		j.contextLogger.Infof("!!!job: %v ScaleDown Successfully!!!", j.job.ObjectMeta.Name)
 	}
@@ -909,7 +887,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 	}
 
 	if scaleUpFlag == false && scaledownFlag == false {
-		 j.SetCurrentRunningReplicas()
+		j.SetCurrentRunningReplicas()
 	}
 
 	// Call GetStatus in each reconcile loop

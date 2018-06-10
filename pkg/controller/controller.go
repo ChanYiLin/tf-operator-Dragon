@@ -820,9 +820,6 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		scaleDownFlag := false
 		jobTemp := j.Value.GetJob()
 
-
-
-
 		enqueueTime := jobTemp.Status.EnqueueScheduleTime
 		currentTime := time.Now().Format("2006.01.02-15:04:05")
 
@@ -961,7 +958,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			minuteStr := strings.Split(timeDiff, "m")
 			fmt.Println(minuteStr)
 			minuteInt, _ := strconv.Atoi(minuteStr[0])
-			if minuteInt >= 5 || strings.ContainsAny(timeDiff, "h") {
+			if minuteInt >= 2 || strings.ContainsAny(timeDiff, "h") {
 				log.Info("@@@@ scale up timer has over 5 min @@@@")
 				overMinUP = true
 			} else {
@@ -974,7 +971,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		log.Info("====****==== Scale Up timeDiff :%v ====****==== ", timeDiff)
 		if overMinUP == true {
 			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
-			log.Info("Scale Up timeDiff > 5 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+			log.Info("Scale Up timeDiff > 2 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
 			c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
 		}
 	}
@@ -1015,7 +1012,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 
 			// if job succeed then record the finish time.
 			j.Value.JobFinishSetTime()
-
+			j.Value.Delete()
 			jobTemp := QueueJobs{Key: j.Key, Value: j.Value}
 			c.finishQueueJob = append(c.finishQueueJob, jobTemp)
 			continue
