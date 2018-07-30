@@ -1,14 +1,10 @@
 # K8s Custom Resource and Operator For TensorFlow jobs
 
-[![Build Status](https://travis-ci.org/kubeflow/tf-operator.svg?branch=master)](https://travis-ci.org/kubeflow/tf-operator)
-[![Coverage Status](https://coveralls.io/repos/github/kubeflow/tf-operator/badge.svg?branch=master)](https://coveralls.io/github/kubeflow/tf-operator?branch=master)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kubeflow/tf-operator)](https://goreportcard.com/report/github.com/kubeflow/tf-operator)
 
 ## Quick Links
 
-* [Prow test dashboard](https://k8s-testgrid.appspot.com/sig-big-data)
-* [Prow jobs dashboard](https://prow.k8s.io/?repo=kubeflow%2Ftf-operator)
-* [Argo UI for E2E tests](http://testing-argo.kubeflow.org)
+[![Origin Kubeflow/tf-operator](https://github.com/kubeflow/tf-operator)
+
 
 ## Overview
 
@@ -118,6 +114,10 @@ For each replica you define a **template** which is a K8s
 The template allows you to specify the containers, volumes, etc... that
 should be created for each replica.
 
+### Using gang-scheduling and auto-scaling
+
+Checkout the branch of gang-scheduling or auto-scaling and build the tf-operator and Docker image.
+Change the tf-operator image to the new image.
 
 ### Using GPUs
 
@@ -350,13 +350,3 @@ REPLICA_TYPE=worker,REPLICA_INDEX=0
 
 which you could then search for in the StackDriver UI. Once you find
 the entry you can expand it to see **resource.labels.pod_id**.
-
-
-## Contributing
-
-Please refer to the [developer_guide](developer_guide.md)
-
-## Community
-
-This is a part of Kubeflow, so please see [readme in kubeflow/kubeflow](https://github.com/kubeflow/kubeflow#get-involved) to get in touch with the community.
-# tf-operator-extend
