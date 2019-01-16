@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	k8sErrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/kubernetes/pkg/api"
 
 	tfv1alpha1 "github.com/kubeflow/tf-operator/pkg/apis/tensorflow/v1alpha1"
 	"github.com/kubeflow/tf-operator/pkg/util/k8sutil"
@@ -266,11 +269,90 @@ func (s *TFReplicaSet) CreatePodWithIndex(index int32, name string, replicaType 
 	return s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).Create(pod)
 }
 
-func (s *TFReplicaSet) DeleteSpecificPod(nodeName string) error {
+func (s *TFReplicaSet) getLogOfPod(pod v1.Pod) (string, error) {
 
+	container := pod.Spec.Containers[0].Name
+
+	logOptions := &api.PodLogOptions{
+		Container:  container,
+		Follow:     false,
+		Previous:   false,
+		Timestamps: true,
+	}
+	client := s.ClientSet.CoreV1().RESTClient()
+
+	req := client.Get().
+		Namespace(s.Job.job.ObjectMeta.Namespace).
+		Name(pod.ObjectMeta.Name).
+		Resource("pods").
+		SubResource("log").
+		Param("follow", strconv.FormatBool(logOptions.Follow)).
+		Param("container", logOptions.Container).
+		Param("previous", strconv.FormatBool(logOptions.Previous)).
+		Param("timestamps", strconv.FormatBool(logOptions.Timestamps))
+
+	readCloser, err := req.Stream()
+	if err != nil {
+		s.contextLogger.Infof("error when readCloser, err := req.Stream() error: %v", err)
+		return "", err
+	}
+
+	defer readCloser.Close()
+
+	result, err := ioutil.ReadAll(readCloser)
+	if err != nil {
+		s.contextLogger.Infof("error when result, err := ioutil.ReadAll(readCloser) error: %v", err)
+		return "", err
+	}
+
+	//j.contextLogger.Infof("get Worker0's log", string(result))
+
+	return string(result), nil
+}
+
+func (s *TFReplicaSet) getStepsOfPod(pod v1.Pod) (int, error) {
+	var trainSteps int = 0
+
+	logs, err := s.getLogOfPod(pod)
+	if err != nil {
+		s.contextLogger.Infof("error in GetTrainingSteps after getLogOfPod: %v", err)
+		return 0, err
+	}
+	// 算training steps
+
+	sliceTemp := strings.Split(logs, "\n")
+	last := len(sliceTemp)
+	if last < 2 {
+		trainSteps = 0 // <=
+	} else {
+		if strings.Contains(sliceTemp[last-2], "images/sec") {
+			// last line: "2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60\timages/sec: 102.4 +/- 0.7 (jitter = 5.3)\t12.258"
+			lastLine := sliceTemp[last-2]
+
+			// sliceLastLineTemp: ["2018-05-09T15:19:36.629802035Z INFO|2018-05-09T15:19:36|/opt/launcher.py|27| 60" "images/sec: 102.4 +/- 0.7 (jitter = 5.3)" "12.258"]
+			sliceLastLineTemp := strings.Split(lastLine, "\t")
+
+			// getTrainSteps: ["2018-05-09T15:19:36.629802035Z" "INFO|2018-05-09T15:19:36|/opt/launcher.py|27|" "60"]
+			getTrainSteps := strings.Split(sliceLastLineTemp[0], " ")
+
+			//lastStep: 60
+			lastStep, _ := strconv.Atoi(getTrainSteps[2])
+
+			trainSteps = lastStep // <=
+
+		} else {
+			trainSteps = 0 // <=
+		}
+	}
+	s.contextLogger.Infof("in scale down get each workers pod steps: %v training steps = %v", pod.ObjectMeta.Name, trainSteps)
+	return trainSteps, nil
+}
+
+func (s *TFReplicaSet) DeleteSpecificPod(nodeName string) (int, error) {
+	var podTrainingSteps int = 0
 	selector, err := s.Labels().ToSelector()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	options := meta_v1.ListOptions{
@@ -280,21 +362,30 @@ func (s *TFReplicaSet) DeleteSpecificPod(nodeName string) error {
 	l, _ := s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).List(options)
 
 	for _, pod := range l.Items {
-		if pod.Spec.NodeName == nodeName{
+		if pod.Spec.NodeName == nodeName && pod.ObjectMeta.Labels["task_index"] != "0" {
 			err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).Delete(pod.ObjectMeta.Name, nil)
 
 			if err != nil && k8s_errors.IsNotFound(err) != true {
 				s.contextLogger.Errorf("There was a problem deleting the pods; %v", err)
-				return err
+				return 0, err
 			}
+
+			podTrainingSteps, err = s.getStepsOfPod(pod)
+			for {
+				_, err = s.ClientSet.CoreV1().Pods(s.Job.job.ObjectMeta.Namespace).Get(pod.ObjectMeta.Name, meta_v1.GetOptions{})
+				if err != nil && k8s_errors.IsNotFound(err) == true {
+					break
+				}
+				time.Sleep(time.Duration(5) * time.Second)
+			}
+
 			break
 		}
 	}
 
-	return nil
+	return podTrainingSteps, nil
 
 }
-
 
 // Delete deletes the replicas
 func (s *TFReplicaSet) Delete() error {
@@ -592,7 +683,7 @@ func (s *TFReplicaSet) SyncPods(placementPlan map[string]int, PSPlace string, re
 			if pendingTmp == 0 {
 				break
 			}
-			time.Sleep(time.Duration(10) * time.Second)
+			time.Sleep(time.Duration(5) * time.Second)
 		}
 	}
 	return nil

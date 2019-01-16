@@ -567,7 +567,7 @@ func (j *TrainingJob) getLogOfPod(podName string) (string, error) {
 
 	req := client.Get().
 		Namespace(j.job.ObjectMeta.Namespace).
-		Name(j.Worker0Name).
+		Name(podName).
 		Resource("pods").
 		SubResource("log").
 		Param("follow", strconv.FormatBool(logOptions.Follow)).
@@ -666,7 +666,7 @@ func (j *TrainingJob) GetTrainingSteps() (int, error) {
 //	"node2" : 3 workers,
 //}
 
-func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) string {
+func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) (string, error) {
 
 	node1Num := j.placementPlan["apollo61"]
 	node2Num := j.placementPlan["apollo62"]
@@ -697,15 +697,22 @@ func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) string {
 		}
 
 	}
-
+	newJob := j.job
 	for scaledownNum < 0 && j.placementPlan[small] > 0 {
 		j.placementPlan[small] -= 1
 
 		if doRealScaledown == true { // delete the worker pod on this node
-
 			for _, r := range j.Replicas {
+				//podTrainingSteps := 0
 				if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
-					r.DeleteSpecificPod(small)
+					j.contextLogger.Infof("job: %v delete worker, current placementPlan: %v", j.job.ObjectMeta.Name, j.placementPlan)
+					podTrainingSteps, err := r.DeleteSpecificPod(small)
+
+					newJob.Spec.TotalNumber = j.job.Spec.TotalNumber - podTrainingSteps
+
+					if err != nil {
+						return PSPlace, err
+					}
 				}
 			}
 		}
@@ -721,8 +728,17 @@ func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) string {
 
 			if doRealScaledown == true { // delete the worker pod on this node
 				for _, r := range j.Replicas {
+					//podTrainingSteps := 0
 					if r.Spec.TFReplicaType == tfv1alpha1.WORKER {
-						r.DeleteSpecificPod(big)
+						j.contextLogger.Infof("job: %v delete worker, current placementPlan: %v", j.job.ObjectMeta.Name, j.placementPlan)
+
+						podTrainingSteps, err := r.DeleteSpecificPod(big)
+
+						newJob.Spec.TotalNumber = j.job.Spec.TotalNumber - podTrainingSteps
+
+						if err != nil {
+							return PSPlace, err
+						}
 					}
 				}
 			}
@@ -731,7 +747,8 @@ func (j *TrainingJob) ScaleDown(scaledownNum int, doRealScaledown bool) string {
 		}
 	}
 
-	return PSPlace
+	j.tfJobClient.KubeflowV1alpha1().TFJobs(j.job.ObjectMeta.Namespace).Update(newJob)
+	return PSPlace, nil
 }
 
 func (j *TrainingJob) ScaleUp(scaleUpNum int) {
@@ -836,7 +853,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 
 		if trainingSteps == 0 {
 			j.contextLogger.Infof("++++the worker has NNNNOTTTT start to train, so just delete the pod++++++")
-			PSPlace := j.ScaleDown(scaleNum, false)
+			PSPlace, err := j.ScaleDown(scaleNum, false)
 			j.PSPlace = PSPlace
 			j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 
@@ -849,7 +866,7 @@ func (j *TrainingJob) Reconcile(scaleNum int, scaledownFlag bool, scaleUpFlag bo
 			}
 		} else {
 			j.contextLogger.Infof("++++the worker has start to train, so just delete the pod++++++")
-			PSPlace := j.ScaleDown(scaleNum, true)
+			PSPlace, err := j.ScaleDown(scaleNum, true)
 			j.PSPlace = PSPlace
 			j.contextLogger.Infof("job: %v  after scale down, placementPlan: %v, PSPlace: %v ", j.job.ObjectMeta.Name, j.placementPlan, j.PSPlace)
 

@@ -164,6 +164,8 @@ type Controller struct {
 
 	scaleUpTimer string
 
+	tempminjob string
+
 	/*** Jack Lin ***/
 
 }
@@ -593,17 +595,22 @@ func (c *Controller) scaleDown(r ClusterResource, minmin int) (map[string]int, b
 		currentReplicas = jobTemp.Status.RunningReplicas
 		minReplicas = jobTemp.Spec.MinInstance
 
-		if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
+		//if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
+		for {
 			log.Info("in scaledown, current job for scale down is: ", jobTemp.ObjectMeta.Name)
-			for currentReplicas > minReplicas {
-				currentReplicas -= 1
-				additional += 1
-				diff[jobTemp.ObjectMeta.Name] -= 1
-				if additional >= minminTemp {
-					return diff, true
-				}
+			log.Info("New- currentReplicas=%v, jobTemp_Spec_MinInstance=%v, ", currentReplicas, minReplicas)
+			if currentReplicas <= minReplicas {
+				break
+			}
+
+			currentReplicas -= 1
+			additional += 1
+			diff[jobTemp.ObjectMeta.Name] -= 1
+			if additional >= minminTemp {
+				return diff, true
 			}
 		}
+		//}
 	}
 	return diff, false
 }
@@ -650,11 +657,12 @@ func (c *Controller) scaleUp(r ClusterResource) (map[string]int, bool) {
 
 		for _, j := range c.runningQueueJob {
 			jobTemp := j.Value.GetJob()
-			if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
-				add := dryScaleUp(j.Value, scaleUpPlan[jobTemp.ObjectMeta.Name])
-				scaleUpPlan[jobTemp.ObjectMeta.Name] += add
-				log.Info("current job to scale up is %v and the current scaleUpPlan is %v", jobTemp.ObjectMeta.Name, scaleUpPlan)
-			}
+			//if jobTemp.Spec.ModelName == "resnet" || jobTemp.Spec.ModelName == "alexnet" {
+
+			add := dryScaleUp(j.Value, scaleUpPlan[jobTemp.ObjectMeta.Name])
+			scaleUpPlan[jobTemp.ObjectMeta.Name] += add
+			log.Info("current job to scale up is %v and the current scaleUpPlan is %v", jobTemp.ObjectMeta.Name, scaleUpPlan)
+			//}
 		}
 
 		if change == false {
@@ -833,8 +841,8 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			minuteStr := strings.Split(timeDiff, "m")
 			fmt.Println(minuteStr)
 			minuteInt, _ := strconv.Atoi(minuteStr[0])
-			if minuteInt >= 1 || strings.ContainsAny(timeDiff, "h") {
-				log.Info("***job: ", j.Key, " has waited for over 1 minutes!***")
+			if (minuteInt >= 2 || strings.ContainsAny(timeDiff, "h")) && c.tempminjob != j.Key {
+				log.Info("***job: ", j.Key, " has waited for over 2 minutes!***")
 				scaleDownFlag = true
 			}
 		} else {
@@ -930,6 +938,9 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			log.Info("there is a job in scheduler cannot be run, the minmijob, ", minminjob, " with minmin Replicas: ", minmin)
 			log.Info("after scale Down, diff: ", diff, " enoughRes: ", enoughRes)
 			log.Info("============")
+			if enoughRes == true {
+				c.tempminjob = minminjob
+			}
 		}
 	}
 	scaleUpPlan := make(map[string]int)
@@ -958,8 +969,8 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 			minuteStr := strings.Split(timeDiff, "m")
 			fmt.Println(minuteStr)
 			minuteInt, _ := strconv.Atoi(minuteStr[0])
-			if minuteInt >= 2 || strings.ContainsAny(timeDiff, "h") {
-				log.Info("@@@@ scale up timer has over 5 min @@@@")
+			if minuteInt >= 1 || strings.ContainsAny(timeDiff, "h") {
+				log.Info("@@@@ scale up timer has over 1 min @@@@")
 				overMinUP = true
 			} else {
 				overMinUP = false
@@ -971,7 +982,7 @@ func (c *Controller) syncTFJob(key string) (bool, error) {
 		log.Info("====****==== Scale Up timeDiff :%v ====****==== ", timeDiff)
 		if overMinUP == true {
 			scaleUpPlan, scaleUpFlag = c.scaleUp(r)
-			log.Info("Scale Up timeDiff > 2 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
+			log.Info("Scale Up timeDiff > 1 min and scaleUpPlan: %v, scaleUpFlag:%v ", scaleUpPlan, scaleUpFlag)
 			c.scaleUpTimer = time.Now().Format("2006.01.02-15:04:05")
 		}
 	}

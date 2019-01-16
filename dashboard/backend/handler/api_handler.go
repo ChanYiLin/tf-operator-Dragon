@@ -120,7 +120,7 @@ func CreateHTTPAPIHandler(client client.ClientManager) (http.Handler, error) {
 func (apiHandler *APIHandler) handleGetTFJobs(request *restful.Request, response *restful.Response) {
 	namespace := request.PathParameter("namespace")
 	jobs, err := apiHandler.cManager.TFJobClient.KubeflowV1alpha1().TFJobs(namespace).List(metav1.ListOptions{})
-
+	fmt.Printf("jobs: %+v", jobs)
 	ns := "all"
 	if namespace != "" {
 		ns = namespace
